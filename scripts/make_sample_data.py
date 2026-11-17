@@ -1,7 +1,7 @@
 """Generate a small, deliberately messy HR dataset for testing the pipeline.
 
 Run:  python scripts/make_sample_data.py
-Out:  data/raw/hr_employees_messy.
+Out:  data/raw/hr_employees_messy.csv
 
 Replace this with your team's real dataset once you pick a domain.
 """
