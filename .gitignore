@@ -5,3 +5,6 @@ venv/
 .pytest_cache/
 results/
 .DS_Store
+
+# real datasets: keep big files out of git (download with scripts/download_bank_marketing.py)
+data/raw/bank_marketing.csv

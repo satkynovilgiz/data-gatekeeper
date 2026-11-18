@@ -1,0 +1,253 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/satkynovilgiz/data-gatekeeper/docs/profiling_report.schema.json",
+  "title": "Data Gatekeeper — profiling_report.json",
+  "description": "Output of Module 1 (profile_dataset / profile_file / POST /profile). Report version 1.1.",
+  "type": "object",
+  "required": ["report_version", "generated_at", "dataset", "columns", "missing_matrix",
+               "correlation", "categorical_association", "issues", "summary"],
+  "additionalProperties": false,
+  "properties": {
+    "report_version": {"type": "string", "pattern": "^\\d+\\.\\d+$"},
+    "generated_at": {"type": "string", "format": "date-time"},
+
+    "dataset": {
+      "type": "object",
+      "required": ["name", "rows", "columns", "memory_kb", "duplicate_rows",
+                   "total_missing_cells", "missing_cells_pct"],
+      "additionalProperties": false,
+      "properties": {
+        "name": {"type": "string"},
+        "rows": {"$ref": "#/$defs/count"},
+        "columns": {"$ref": "#/$defs/count"},
+        "memory_kb": {"type": "number", "minimum": 0},
+        "duplicate_rows": {"$ref": "#/$defs/count"},
+        "total_missing_cells": {"$ref": "#/$defs/count"},
+        "missing_cells_pct": {"$ref": "#/$defs/percent"}
+      }
+    },
+
+    "columns": {"type": "array", "items": {"$ref": "#/$defs/column"}},
+
+    "missing_matrix": {
+      "description": "column name -> number of missing cells",
+      "type": "object",
+      "additionalProperties": {"$ref": "#/$defs/count"}
+    },
+
+    "correlation": {
+      "description": "Pearson correlation between numeric columns",
+      "type": "object",
+      "required": ["method", "matrix", "strong_pairs"],
+      "additionalProperties": false,
+      "properties": {
+        "method": {"const": "pearson"},
+        "matrix": {"$ref": "#/$defs/matrix"},
+        "strong_pairs": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["a", "b", "corr"],
+            "additionalProperties": false,
+            "properties": {
+              "a": {"type": "string"},
+              "b": {"type": "string"},
+              "corr": {"type": "number", "minimum": -1, "maximum": 1}
+            }
+          }
+        }
+      }
+    },
+
+    "categorical_association": {
+      "description": "Cramér's V between categorical columns (0 = unrelated, 1 = fully linked)",
+      "type": "object",
+      "required": ["method", "matrix", "strong_pairs"],
+      "additionalProperties": false,
+      "properties": {
+        "method": {"const": "cramers_v"},
+        "matrix": {"$ref": "#/$defs/matrix"},
+        "strong_pairs": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["a", "b", "cramers_v"],
+            "additionalProperties": false,
+            "properties": {
+              "a": {"type": "string"},
+              "b": {"type": "string"},
+              "cramers_v": {"type": "number", "minimum": 0, "maximum": 1}
+            }
+          }
+        }
+      }
+    },
+
+    "issues": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["column", "rule", "severity", "detail"],
+        "additionalProperties": false,
+        "properties": {
+          "column": {"type": "string", "description": "column name, or <dataset> for whole-table issues"},
+          "rule": {
+            "enum": ["mostly_missing", "missing_values", "constant_column", "mixed_types",
+                     "potential_pii", "inconsistent_category_format", "inconsistent_date_format",
+                     "outliers", "invalid_format_values", "duplicate_rows",
+                     "id_stored_as_number", "dominant_value", "placeholder_values"]
+          },
+          "severity": {"enum": ["high", "medium", "info"]},
+          "detail": {"type": "string"}
+        }
+      }
+    },
+
+    "summary": {
+      "type": "object",
+      "required": ["pii_columns", "mixed_type_columns", "suspicious_columns", "issue_counts"],
+      "additionalProperties": false,
+      "properties": {
+        "pii_columns": {"$ref": "#/$defs/string_list"},
+        "mixed_type_columns": {"$ref": "#/$defs/string_list"},
+        "suspicious_columns": {"$ref": "#/$defs/string_list"},
+        "issue_counts": {
+          "type": "object",
+          "required": ["high", "medium", "info"],
+          "additionalProperties": false,
+          "properties": {
+            "high": {"$ref": "#/$defs/count"},
+            "medium": {"$ref": "#/$defs/count"},
+            "info": {"$ref": "#/$defs/count"}
+          }
+        }
+      }
+    },
+
+    "charts": {
+      "description": "Only added by the CLI (run_profiling.py): chart name -> PNG path (null if not drawn)",
+      "type": "object",
+      "additionalProperties": {"type": ["string", "null"]}
+    }
+  },
+
+  "$defs": {
+    "count": {"type": "integer", "minimum": 0},
+    "percent": {"type": "number", "minimum": 0, "maximum": 100},
+    "nullable_number": {"type": ["number", "null"]},
+    "string_list": {"type": "array", "items": {"type": "string"}},
+    "count_map": {"type": "object", "additionalProperties": {"$ref": "#/$defs/count"}},
+    "matrix": {
+      "description": "column -> column -> value (null when it cannot be computed)",
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "additionalProperties": {"$ref": "#/$defs/nullable_number"}
+      }
+    },
+
+    "column": {
+      "type": "object",
+      "required": ["name", "pandas_dtype", "inferred_type", "semantic", "is_pii",
+                   "missing_count", "missing_pct", "unique_count", "unique_pct",
+                   "value_types", "is_mixed_type", "top_value", "placeholder_values"],
+      "additionalProperties": false,
+      "properties": {
+        "name": {"type": "string"},
+        "pandas_dtype": {"type": "string"},
+        "inferred_type": {"enum": ["numeric", "datetime", "boolean", "categorical", "text", "empty"]},
+        "semantic": {
+          "type": "object",
+          "required": ["semantic_type", "confidence", "evidence"],
+          "additionalProperties": false,
+          "properties": {
+            "semantic_type": {
+              "enum": ["numeric", "datetime", "boolean", "categorical", "text", "empty",
+                       "date", "email", "phone", "postcode", "url", "id", "person_name",
+                       "address", "credit_card", "ip_address", "date_of_birth"]
+            },
+            "confidence": {"type": "number", "minimum": 0, "maximum": 1},
+            "evidence": {"type": "string"}
+          }
+        },
+        "is_pii": {"type": "boolean"},
+        "missing_count": {"$ref": "#/$defs/count"},
+        "missing_pct": {"$ref": "#/$defs/percent"},
+        "unique_count": {"$ref": "#/$defs/count"},
+        "unique_pct": {"$ref": "#/$defs/percent"},
+        "value_types": {"$ref": "#/$defs/count_map"},
+        "is_mixed_type": {"type": "boolean"},
+        "top_value": {
+          "oneOf": [
+            {"type": "null"},
+            {
+              "type": "object",
+              "required": ["value", "pct"],
+              "additionalProperties": false,
+              "properties": {
+                "value": {"type": "string"},
+                "pct": {"$ref": "#/$defs/percent"}
+              }
+            }
+          ]
+        },
+        "placeholder_values": {"$ref": "#/$defs/count_map"},
+
+        "numeric_stats": {
+          "type": "object",
+          "required": ["mean", "std", "min", "p25", "median", "p75", "max", "skew",
+                       "outliers_iqr", "histogram"],
+          "additionalProperties": false,
+          "properties": {
+            "mean": {"$ref": "#/$defs/nullable_number"},
+            "std": {"$ref": "#/$defs/nullable_number"},
+            "min": {"$ref": "#/$defs/nullable_number"},
+            "p25": {"$ref": "#/$defs/nullable_number"},
+            "median": {"$ref": "#/$defs/nullable_number"},
+            "p75": {"$ref": "#/$defs/nullable_number"},
+            "max": {"$ref": "#/$defs/nullable_number"},
+            "skew": {"$ref": "#/$defs/nullable_number"},
+            "outliers_iqr": {
+              "type": "object",
+              "required": ["count", "pct", "lower_fence", "upper_fence"],
+              "additionalProperties": false,
+              "properties": {
+                "count": {"$ref": "#/$defs/count"},
+                "pct": {"$ref": "#/$defs/percent"},
+                "lower_fence": {"$ref": "#/$defs/nullable_number"},
+                "upper_fence": {"$ref": "#/$defs/nullable_number"}
+              }
+            },
+            "histogram": {
+              "type": "object",
+              "required": ["bin_edges", "counts"],
+              "additionalProperties": false,
+              "properties": {
+                "bin_edges": {"type": "array", "items": {"type": "number"}, "minItems": 2},
+                "counts": {"type": "array", "items": {"$ref": "#/$defs/count"}, "minItems": 1}
+              }
+            }
+          }
+        },
+
+        "categorical_stats": {
+          "type": "object",
+          "required": ["top_values", "top_values_pct", "other_values_count",
+                       "case_or_space_variants"],
+          "additionalProperties": false,
+          "properties": {
+            "top_values": {"$ref": "#/$defs/count_map"},
+            "top_values_pct": {"type": "object", "additionalProperties": {"$ref": "#/$defs/percent"}},
+            "other_values_count": {"$ref": "#/$defs/count"},
+            "case_or_space_variants": {
+              "type": "object",
+              "additionalProperties": {"$ref": "#/$defs/string_list"}
+            }
+          }
+        },
+
+        "date_formats": {"$ref": "#/$defs/count_map"}
+      }
+    }
+  }
+}
