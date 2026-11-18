@@ -6,9 +6,7 @@ Usage:
 import argparse
 from pathlib import Path
 
-import pandas as pd
-
-from src.profiling.profiler import profile_dataset, save_report
+from src.profiling.profiler import profile_dataset, read_csv_raw, save_report
 from src.profiling.visualize import make_all
 
 
@@ -18,9 +16,9 @@ def main():
     ap.add_argument("--output", default="results", help="folder for the report and charts")
     args = ap.parse_args()
 
-    # dtype=str keeps the raw values exactly as they are in the file,
-    # so mixed types ("5" vs "five") are not hidden by pandas.
-    df = pd.read_csv(args.input, dtype=str, keep_default_na=True)
+    # Reads every value as text (so mixed types are not hidden) and
+    # detects the separator automatically (, or ; or tab).
+    df = read_csv_raw(args.input)
 
     report = profile_dataset(df, dataset_name=Path(args.input).name)
     numeric_cols = [c["name"] for c in report["columns"] if "numeric_stats" in c]
@@ -31,6 +29,7 @@ def main():
     print(f"Profiled {d['rows']} rows x {d['columns']} columns")
     print(f"Missing cells: {d['missing_cells_pct']}%   Duplicate rows: {d['duplicate_rows']}")
     print(f"PII columns: {s['pii_columns']}")
+    print(f"Suspicious columns: {s['suspicious_columns']}")
     print(f"Issues: {s['issue_counts']}")
     print(f"Report -> {path}")
 

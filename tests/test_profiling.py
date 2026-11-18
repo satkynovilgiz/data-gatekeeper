@@ -61,3 +61,4 @@ def test_report_is_valid_json(tmp_path, messy_df):
     path = save_report(r, tmp_path)
     loaded = json.loads(path.read_text())
     assert loaded["dataset"]["name"] == "test.csv"
+
