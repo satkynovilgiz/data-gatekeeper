@@ -12,6 +12,7 @@ import json
 import time
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 import pandas as pd
@@ -48,8 +49,11 @@ SUSPICIOUS_RULES = {"id_stored_as_number", "dominant_value", "constant_column",
 
 
 # ---------------------------------------------------------------- helpers
-def _py(v):
-    """Convert numpy/pandas scalars to plain Python so json.dump works."""
+def _py(v: Any) -> Any:
+    """Convert numpy/pandas scalars to plain Python so json.dump works.
+
+    Used as json.dumps(default=_py); any other value is returned unchanged.
+    """
     if isinstance(v, (np.integer,)):
         return int(v)
     if isinstance(v, (np.floating,)):
@@ -258,9 +262,9 @@ def profile_column(name: str, series: pd.Series) -> dict:
 # ----------------------------------------------------------------- rules
 def run_rules(df: pd.DataFrame, columns: list[dict]) -> list[dict]:
     """Profiling rule engine: flag suspicious columns, inconsistent formats, PII."""
-    issues = []
+    issues: list[dict] = []
 
-    def add(col, rule, severity, detail):
+    def add(col: str, rule: str, severity: str, detail: str) -> None:
         issues.append({"column": col, "rule": rule, "severity": severity, "detail": detail})
 
     for c in columns:
