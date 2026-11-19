@@ -13,3 +13,6 @@ httpx>=0.27               # needed by FastAPI's TestClient in tests
 
 # Sprint 2 — report schema validation
 jsonschema>=4.0
+
+# Developer tools
+ruff>=0.5                 # linter: ruff check .
