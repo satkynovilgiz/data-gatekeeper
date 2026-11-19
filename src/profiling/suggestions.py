@@ -57,7 +57,8 @@ def _suggest(issue: dict, col: dict | None) -> tuple[str, str]:
     if rule == "outliers":
         return "cap_outliers", "cap values at the IQR fences (winsorise), or check them by hand"
     if rule == "invalid_format_values":
-        return "set_invalid_to_nan", f"set values that do not match the {col['semantic']['semantic_type']} format to NaN"
+        sem = col["semantic"]["semantic_type"]
+        return "set_invalid_to_nan", f"set values that do not match the {sem} format to NaN"
     if rule == "potential_pii":
         return "mask_pii", "mask or hash this personal data before sharing"
     if rule == "id_stored_as_number":

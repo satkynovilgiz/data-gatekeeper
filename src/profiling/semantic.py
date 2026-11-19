@@ -46,7 +46,10 @@ PII_TYPES = {"email", "phone", "postcode", "person_name", "address",
 
 
 def name_words(name: str) -> list[str]:
-    """Split a column name into lowercase words: 'customerID' / 'customer_id' -> ['customer', 'id']."""
+    """Split a column name into lowercase words.
+
+    'customerID' and 'customer_id' both give ['customer', 'id'].
+    """
     name = re.sub(r"([a-z])([A-Z])", r"\1 \2", name)      # camelCase -> camel Case
     return [w for w in re.split(r"[^a-z0-9]+", name.lower()) if w]
 
@@ -90,6 +93,10 @@ def match_rate(series: pd.Series, pattern: re.Pattern) -> float:
 
 
 def date_parse_rate(series: pd.Series) -> float:
+    """Share of non-null values (0..1) that pandas can parse as a date.
+
+    Returns 0.0 for an empty column.
+    """
     s = series.dropna().astype(str)
     if s.empty:
         return 0.0
@@ -98,6 +105,10 @@ def date_parse_rate(series: pd.Series) -> float:
 
 
 def numeric_parse_rate(series: pd.Series) -> float:
+    """Share of non-null values (0..1) that can be read as a number ("3.5" yes, "abc" no).
+
+    Returns 0.0 for an empty column.
+    """
     s = series.dropna()
     if s.empty:
         return 0.0

@@ -12,14 +12,19 @@ import json
 import time
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 import pandas as pd
 
 from src.quality.score import quality_score
 
-from .semantic import (PII_TYPES, date_parse_rate, detect_semantic,
-                       infer_basic_type, numeric_parse_rate)
+from .semantic import (
+    PII_TYPES,
+    detect_semantic,
+    infer_basic_type,
+    numeric_parse_rate,
+)
 from .suggestions import cleaning_suggestions
 
 REPORT_VERSION = "1.2"
@@ -44,8 +49,11 @@ SUSPICIOUS_RULES = {"id_stored_as_number", "dominant_value", "constant_column",
 
 
 # ---------------------------------------------------------------- helpers
-def _py(v):
-    """Convert numpy/pandas scalars to plain Python so json.dump works."""
+def _py(v: Any) -> Any:
+    """Convert numpy/pandas scalars to plain Python so json.dump works.
+
+    Used as json.dumps(default=_py); any other value is returned unchanged.
+    """
     if isinstance(v, (np.integer,)):
         return int(v)
     if isinstance(v, (np.floating,)):
@@ -73,7 +81,13 @@ def _histogram(s: pd.Series, bins: int = HISTOGRAM_BINS) -> dict:
 
     bin_edges has one more item than counts: bin i covers [edges[i], edges[i+1]).
     """
-    counts, edges = np.histogram(s, bins=bins)
+    try:
+        counts, edges = np.histogram(s, bins=bins)
+    except ValueError:
+        # numpy >= 2 cannot split the range into equal finite bins when the numbers
+        # are huge and (almost) all the same, e.g. a column of one card number
+        # 4111111111111111. Then use a single bin from min to max.
+        counts, edges = np.array([len(s)]), np.array([s.min(), s.max()])
     return {"bin_edges": [_py(e) for e in edges], "counts": [int(c) for c in counts]}
 
 
@@ -213,6 +227,13 @@ def categorical_association(df: pd.DataFrame, columns: list[dict],
 
 # ---------------------------------------------------------- column profile
 def profile_column(name: str, series: pd.Series) -> dict:
+    """Profile one column.
+
+    Input:  the column name and its values (read as text).
+    Output: a dict with type, meaning (semantic), PII flag, missing and disguised
+            missing counts, unique counts, top value, and numeric / categorical /
+            date statistics where they apply (see the "column" part of the schema).
+    """
     n = len(series)
     missing = int(series.isna().sum())
     basic = infer_basic_type(series)
@@ -254,9 +275,9 @@ def profile_column(name: str, series: pd.Series) -> dict:
 # ----------------------------------------------------------------- rules
 def run_rules(df: pd.DataFrame, columns: list[dict]) -> list[dict]:
     """Profiling rule engine: flag suspicious columns, inconsistent formats, PII."""
-    issues = []
+    issues: list[dict] = []
 
-    def add(col, rule, severity, detail):
+    def add(col: str, rule: str, severity: str, detail: str) -> None:
         issues.append({"column": col, "rule": rule, "severity": severity, "detail": detail})
 
     for c in columns:
@@ -376,7 +397,8 @@ def profile_dataset(df: pd.DataFrame, dataset_name: str = "dataset",
             "total_missing_cells": real_missing,
             "missing_cells_pct": round(real_missing / total_cells * 100, 2),
             "disguised_missing_cells": disguised_cells,
-            "true_missing_cells_pct": round((real_missing + disguised_cells) / total_cells * 100, 2),
+            "true_missing_cells_pct":
+                round((real_missing + disguised_cells) / total_cells * 100, 2),
         },
         "columns": columns,
         "missing_matrix": {c: int(df[c].isna().sum()) for c in df.columns},
@@ -402,7 +424,8 @@ def profile_dataset(df: pd.DataFrame, dataset_name: str = "dataset",
     report["cleaning_suggestions"] = cleaning_suggestions(columns, report["issues"])
     rows_in_file = rows_in_file or len(df)
     report["run"] = {
-        "seconds": round(time.perf_counter() - start, 2),   # profiling time (no file reading, no charts)
+        # profiling time only (no file reading, no charts)
+        "seconds": round(time.perf_counter() - start, 2),
         "rows_in_file": int(rows_in_file),
         "rows_profiled": int(len(df)),
         "sampled": bool(len(df) < rows_in_file),
@@ -444,6 +467,10 @@ def profile_file(path: str | Path, dataset_name: str | None = None,
 
 
 def save_report(report: dict, out_dir: str | Path) -> Path:
+    """Write the report as pretty JSON to <out_dir>/profiling_report.json.
+
+    Creates out_dir if needed and returns the path of the written file.
+    """
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     path = out_dir / "profiling_report.json"

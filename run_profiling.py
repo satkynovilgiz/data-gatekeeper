@@ -15,7 +15,13 @@ from src.profiling.visualize import make_all
 log = logging.getLogger("profiling")
 
 
-def main():
+def main() -> None:
+    """Parse the command line, profile the CSV, draw charts and save the report.
+
+    Input:  --input CSV path, --output folder, optional --sample N.
+    Output: <output>/profiling_report.json and <output>/charts/*.png, plus a summary
+            printed to the console and timings in the log.
+    """
     ap = argparse.ArgumentParser(description="Profile a CSV dataset (Module 1)")
     ap.add_argument("--input", required=True, help="path to a CSV file")
     ap.add_argument("--output", default="results", help="folder for the report and charts")
@@ -55,7 +61,8 @@ def main():
           f"Duplicate rows: {d['duplicate_rows']}")
     print(f"PII columns: {s['pii_columns']}")
     print(f"Suspicious columns: {s['suspicious_columns']}")
-    print(f"Issues: {s['issue_counts']}   Cleaning suggestions: {len(report['cleaning_suggestions'])}")
+    print(f"Issues: {s['issue_counts']}   "
+          f"Cleaning suggestions: {len(report['cleaning_suggestions'])}")
     print(f"Quality score: {q['overall']} / 100   {q['dimensions']}")
     print(f"Report -> {path}")
 

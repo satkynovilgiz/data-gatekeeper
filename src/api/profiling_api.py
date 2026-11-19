@@ -26,7 +26,7 @@ app = FastAPI(
 
 
 @app.get("/health")
-def health() -> dict:
+def health() -> dict[str, str]:
     """Simple check that the server is running."""
     return {"status": "ok"}
 
@@ -53,4 +53,4 @@ def profile(file: UploadFile = File(..., description="CSV file to profile")) -> 
         try:
             return profile_file(path, dataset_name=name)
         except Exception as e:   # bad CSV (e.g. broken quotes) -> clear 400 instead of a crash
-            raise HTTPException(status_code=400, detail=f"Could not read the CSV: {e}")
+            raise HTTPException(status_code=400, detail=f"Could not read the CSV: {e}") from e

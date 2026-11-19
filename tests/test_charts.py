@@ -21,7 +21,8 @@ def test_one_chart_per_column(tmp_path):
     assert charts["bar_charts"] == {"job": "bar_job.png"}
     # every file named in the report really exists
     names = list(charts["histograms"].values()) + list(charts["bar_charts"].values())
-    names += [charts["missing_heatmap"], charts["correlation_heatmap"], charts["outlier_distribution"]]
+    names += [charts[k] for k in ("missing_heatmap", "correlation_heatmap",
+                                  "outlier_distribution")]
     for name in names:
         assert (tmp_path / name).stat().st_size > 0
 

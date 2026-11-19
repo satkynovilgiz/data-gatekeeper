@@ -54,7 +54,8 @@ def test_cli_report_with_charts_matches_schema(tmp_path):
 def test_schema_catches_broken_report():
     good = profile_dataset(pd.DataFrame({"a": ["1", "2"]}))
     bad = copy.deepcopy(good)
-    bad["issues"].append({"column": "a", "rule": "made_up_rule", "severity": "urgent", "detail": "x"})
+    bad["issues"].append({"column": "a", "rule": "made_up_rule", "severity": "urgent",
+                          "detail": "x"})
     assert list(VALIDATOR.iter_errors(bad))
     bad = copy.deepcopy(good)
     del bad["dataset"]["rows"]

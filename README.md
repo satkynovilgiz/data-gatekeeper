@@ -1,5 +1,9 @@
 # Data Gatekeeper — Automated Data Cleaning & Validation System
 
+[![tests](https://github.com/satkynovilgiz/data-gatekeeper/actions/workflows/tests.yml/badge.svg)](https://github.com/satkynovilgiz/data-gatekeeper/actions/workflows/tests.yml)
+[![Python 3.11](https://img.shields.io/badge/python-3.11-blue.svg)](https://www.python.org/downloads/)
+[![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
+
 A backend engine that **profiles, cleans, and validates** any dataset before it is used.
 CadetX AI Engineering & Data Science internship project (12 sprints, see [`docs/sprint_plan.md`](docs/sprint_plan.md)).
 
@@ -28,6 +32,14 @@ python run_profiling.py --input data/raw/bank_marketing.csv --output results/ban
 python run_profiling.py --input data/raw/bank_marketing.csv --output results/quick --sample 5000
 pytest -q                                     # run the tests
 ```
+
+### Shortcuts (Makefile)
+| Command | Does |
+|---|---|
+| `make install` | install `requirements.txt` |
+| `make test` | run all tests (`pytest -q`) |
+| `make lint` | check the code with ruff |
+| `make profile-sample` | profile the 1,000-row sample → `results/sample/` |
 
 No internet? Use the committed 1,000-row sample `data/raw/bank_marketing_sample.csv`,
 or the synthetic HR data (`python scripts/make_sample_data.py`). Dataset details: [`docs/dataset.md`](docs/dataset.md).
