@@ -38,3 +38,14 @@ def test_other_values_count_for_long_tail():
     stats = _col(profile_dataset(df), "city")["categorical_stats"]
     assert len(stats["top_values"]) == 10
     assert stats["other_values_count"] == 10   # 5 remaining categories x 2 rows
+
+
+def test_histogram_of_constant_huge_numbers_does_not_crash(tmp_path):
+    # numpy >= 2 raises "Too many bins for data range" here; we fall back to one bin
+    from src.profiling.visualize import make_all
+    df = pd.DataFrame({"card": ["4111111111111111"] * 3, "x": ["1", "2", "3"]})
+    report = profile_dataset(df)
+    hist = _col(report, "card")["numeric_stats"]["histogram"]
+    assert sum(hist["counts"]) == 3
+    assert len(hist["bin_edges"]) == len(hist["counts"]) + 1
+    assert (tmp_path / make_all(df, report, tmp_path)["histograms"]["card"]).exists()

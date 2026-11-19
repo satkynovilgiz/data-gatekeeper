@@ -97,7 +97,9 @@ def histogram_chart(col: dict, path: Path) -> Path | None:
         return None
     edges, counts = hist["bin_edges"], hist["counts"]
     fig, ax = plt.subplots(figsize=(6, 4))
-    ax.bar(edges[:-1], counts, width=np.diff(edges), align="edge",
+    widths = np.diff(edges)
+    widths[widths == 0] = 1                 # single-value column: give the bar a visible width
+    ax.bar(edges[:-1], counts, width=widths, align="edge",
            color="#4C72B0", edgecolor="white")
     ax.set_xlabel(col["name"])
     ax.set_ylabel("Rows")

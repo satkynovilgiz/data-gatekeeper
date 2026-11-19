@@ -14,6 +14,7 @@ versions follow the `report_version` of `profiling_report.json`.
 
 ### Fixed
 - All ruff findings (unused imports, long lines, `raise ... from e` in the API).
+- Histogram crash with numpy 2 on a constant column of huge numbers (e.g. one card number).
 
 ## [1.2] — 2026-11-18 — Sprint 3: Module 1 complete
 ### Added

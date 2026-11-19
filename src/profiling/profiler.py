@@ -81,7 +81,13 @@ def _histogram(s: pd.Series, bins: int = HISTOGRAM_BINS) -> dict:
 
     bin_edges has one more item than counts: bin i covers [edges[i], edges[i+1]).
     """
-    counts, edges = np.histogram(s, bins=bins)
+    try:
+        counts, edges = np.histogram(s, bins=bins)
+    except ValueError:
+        # numpy >= 2 cannot split the range into equal finite bins when the numbers
+        # are huge and (almost) all the same, e.g. a column of one card number
+        # 4111111111111111. Then use a single bin from min to max.
+        counts, edges = np.array([len(s)]), np.array([s.min(), s.max()])
     return {"bin_edges": [_py(e) for e in edges], "counts": [int(c) for c in counts]}
 
 
