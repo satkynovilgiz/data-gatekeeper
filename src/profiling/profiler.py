@@ -18,8 +18,12 @@ import pandas as pd
 
 from src.quality.score import quality_score
 
-from .semantic import (PII_TYPES, date_parse_rate, detect_semantic,
-                       infer_basic_type, numeric_parse_rate)
+from .semantic import (
+    PII_TYPES,
+    detect_semantic,
+    infer_basic_type,
+    numeric_parse_rate,
+)
 from .suggestions import cleaning_suggestions
 
 REPORT_VERSION = "1.2"
@@ -376,7 +380,8 @@ def profile_dataset(df: pd.DataFrame, dataset_name: str = "dataset",
             "total_missing_cells": real_missing,
             "missing_cells_pct": round(real_missing / total_cells * 100, 2),
             "disguised_missing_cells": disguised_cells,
-            "true_missing_cells_pct": round((real_missing + disguised_cells) / total_cells * 100, 2),
+            "true_missing_cells_pct":
+                round((real_missing + disguised_cells) / total_cells * 100, 2),
         },
         "columns": columns,
         "missing_matrix": {c: int(df[c].isna().sum()) for c in df.columns},
@@ -402,7 +407,8 @@ def profile_dataset(df: pd.DataFrame, dataset_name: str = "dataset",
     report["cleaning_suggestions"] = cleaning_suggestions(columns, report["issues"])
     rows_in_file = rows_in_file or len(df)
     report["run"] = {
-        "seconds": round(time.perf_counter() - start, 2),   # profiling time (no file reading, no charts)
+        # profiling time only (no file reading, no charts)
+        "seconds": round(time.perf_counter() - start, 2),
         "rows_in_file": int(rows_in_file),
         "rows_profiled": int(len(df)),
         "sampled": bool(len(df) < rows_in_file),

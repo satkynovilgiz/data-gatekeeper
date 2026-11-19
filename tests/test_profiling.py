@@ -1,7 +1,6 @@
 """Unit tests for Module 1. Run with:  pytest -q"""
 import json
 
-import numpy as np
 import pandas as pd
 import pytest
 

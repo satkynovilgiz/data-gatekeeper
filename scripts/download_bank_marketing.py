@@ -5,7 +5,7 @@ License: CC BY 4.0 (see docs/dataset.md)
 
 Usage:
     python scripts/download_bank_marketing.py            # full file (41,188 rows)
-    python scripts/download_bank_marketing.py --sample   # also rewrite the small random 1,000-row sample
+    python scripts/download_bank_marketing.py --sample   # also rewrite the 1,000-row random sample
 
 The full CSV (~5.8 MB) is NOT stored in git (.gitignore). Only the small
 sample is committed so tests and demos work without internet.

@@ -55,7 +55,8 @@ def main():
           f"Duplicate rows: {d['duplicate_rows']}")
     print(f"PII columns: {s['pii_columns']}")
     print(f"Suspicious columns: {s['suspicious_columns']}")
-    print(f"Issues: {s['issue_counts']}   Cleaning suggestions: {len(report['cleaning_suggestions'])}")
+    print(f"Issues: {s['issue_counts']}   "
+          f"Cleaning suggestions: {len(report['cleaning_suggestions'])}")
     print(f"Quality score: {q['overall']} / 100   {q['dimensions']}")
     print(f"Report -> {path}")
 

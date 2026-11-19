@@ -11,5 +11,10 @@ extend-exclude = ["results", "data"]
 # UP = old syntax that has a newer form
 select = ["E", "W", "F", "I", "B", "UP"]
 
+[tool.ruff.lint.flake8-bugbear]
+# FastAPI declares upload fields as `file: UploadFile = File(...)` — that is the
+# official pattern, not the "mutable default argument" bug B008 looks for.
+extend-immutable-calls = ["fastapi.File"]
+
 [tool.ruff.lint.isort]
 known-first-party = ["src"]
