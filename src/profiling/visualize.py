@@ -17,6 +17,8 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 
+from .profiler import numeric_frame
+
 
 def missing_heatmap(df: pd.DataFrame, path: Path) -> Path:
     fig, ax = plt.subplots(figsize=(max(6, df.shape[1] * 0.6), 5))
@@ -126,8 +128,7 @@ def make_all(df: pd.DataFrame, report: dict, out_dir: str | Path) -> dict:
     """Draw every chart into out_dir and return the file names for report['charts']."""
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
-    numeric_cols = [c["name"] for c in report["columns"] if c.get("numeric_stats")]
-    num_df = df[numeric_cols].apply(pd.to_numeric, errors="coerce")
+    num_df = numeric_frame(df, report["columns"])   # 999 etc. -> NaN, same as the report
     charts = {
         "missing_heatmap": missing_heatmap(df, out_dir / "missing_heatmap.png"),
         "correlation_heatmap": correlation_heatmap(num_df, out_dir / "correlation_heatmap.png"),

@@ -69,3 +69,11 @@ def test_outliers_not_flagged_when_iqr_is_zero():
     out = _col(r, "previous")["numeric_stats"]["outliers_iqr"]
     assert out == {"count": 0, "pct": 0.0, "lower_fence": None, "upper_fence": None}
     assert _issue(r, "previous", "outliers") is None
+
+
+def test_correlation_ignores_sentinels():
+    # without the 999s, x and y rise together perfectly
+    df = pd.DataFrame({"x": ["1", "2", "3", "4", "999", "999", "999", "999"],
+                       "y": ["10", "20", "30", "40", "0", "0", "0", "0"]})
+    corr = profile_dataset(df)["correlation"]["matrix"]["x"]["y"]
+    assert corr == 1.0

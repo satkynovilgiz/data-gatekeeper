@@ -318,6 +318,19 @@ def run_rules(df: pd.DataFrame, columns: list[dict]) -> list[dict]:
 
 
 # --------------------------------------------------------------- dataset
+def numeric_frame(df: pd.DataFrame, columns: list[dict]) -> pd.DataFrame:
+    """Numeric columns as numbers, with disguised missing values (999, 'unknown') set to NaN.
+
+    Used for the correlation matrix and the outlier chart, so they agree with numeric_stats.
+    """
+    out = {}
+    for c in columns:
+        if c.get("numeric_stats"):
+            s = df[c["name"]].mask(df[c["name"]].isin(list(c["disguised_missing"]["values"])))
+            out[c["name"]] = pd.to_numeric(s, errors="coerce")
+    return pd.DataFrame(out, index=df.index)
+
+
 def sample_rows(df: pd.DataFrame, n: int | None, seed: int = SAMPLE_SEED) -> pd.DataFrame:
     """Random sample of n rows (same rows every time thanks to the seed).
 
@@ -339,9 +352,8 @@ def profile_dataset(df: pd.DataFrame, dataset_name: str = "dataset",
     start = time.perf_counter()
     columns = [profile_column(c, df[c]) for c in df.columns]
 
-    numeric_cols = [c["name"] for c in columns if "numeric_stats" in c]
-    num_df = df[numeric_cols].apply(pd.to_numeric, errors="coerce")
-    corr = num_df.corr().round(3) if len(numeric_cols) > 1 else pd.DataFrame()
+    num_df = numeric_frame(df, columns)      # disguised missing values -> NaN
+    corr = num_df.corr().round(3) if num_df.shape[1] > 1 else pd.DataFrame()
     strong = []
     for i, a in enumerate(corr.columns):
         for b in corr.columns[i + 1:]:
