@@ -6,7 +6,7 @@
   "type": "object",
   "required": ["report_version", "generated_at", "dataset", "columns", "missing_matrix",
                "correlation", "categorical_association", "issues", "summary", "quality_score",
-               "cleaning_suggestions"],
+               "cleaning_suggestions", "run"],
   "additionalProperties": false,
   "properties": {
     "report_version": {"type": "string", "pattern": "^\\d+\\.\\d+$"},
@@ -164,6 +164,19 @@
           }
         },
         "weights": {"type": "object", "additionalProperties": {"type": "number", "minimum": 0, "maximum": 1}}
+      }
+    },
+
+    "run": {
+      "description": "How the profiling ran: time taken and whether only a random sample was profiled",
+      "type": "object",
+      "required": ["seconds", "rows_in_file", "rows_profiled", "sampled"],
+      "additionalProperties": false,
+      "properties": {
+        "seconds": {"type": "number", "minimum": 0},
+        "rows_in_file": {"$ref": "#/$defs/count"},
+        "rows_profiled": {"$ref": "#/$defs/count"},
+        "sampled": {"type": "boolean"}
       }
     },
 

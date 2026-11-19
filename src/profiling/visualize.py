@@ -108,7 +108,10 @@ def bar_chart(col: dict, path: Path, top_n: int = 10) -> Path | None:
     hidden = col["disguised_missing"]["values"]
     colors = ["#DD8452" if k in hidden else "#4C72B0" for k in labels]
     fig, ax = plt.subplots(figsize=(6, max(2.5, 0.4 * len(items) + 1)))
-    bars = ax.barh(labels, counts, color=colors)
+    # bars by position + our own labels (passing strings like "1" makes matplotlib guess types)
+    bars = ax.barh(range(len(items)), counts, color=colors)
+    ax.set_yticks(range(len(items)))
+    ax.set_yticklabels(labels)
     ax.bar_label(bars, fmt="%d", padding=3, fontsize=8)   # show the count (tiny bars stay readable)
     ax.margins(x=0.12)                                     # room for the labels
     ax.set_xlabel("Rows")
