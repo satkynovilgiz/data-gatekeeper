@@ -5,7 +5,8 @@
   "description": "Output of Module 1 (profile_dataset / profile_file / POST /profile). Report version 1.2.",
   "type": "object",
   "required": ["report_version", "generated_at", "dataset", "columns", "missing_matrix",
-               "correlation", "categorical_association", "issues", "summary", "quality_score"],
+               "correlation", "categorical_association", "issues", "summary", "quality_score",
+               "cleaning_suggestions"],
   "additionalProperties": false,
   "properties": {
     "report_version": {"type": "string", "pattern": "^\\d+\\.\\d+$"},
@@ -101,6 +102,23 @@
                      "id_stored_as_number", "dominant_value", "disguised_missing"]
           },
           "severity": {"enum": ["high", "medium", "info"]},
+          "detail": {"type": "string"}
+        }
+      }
+    },
+
+    "cleaning_suggestions": {
+      "description": "Hand-off to Module 2: one suggested action per issue, most severe first",
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["column", "rule", "severity", "action", "detail"],
+        "additionalProperties": false,
+        "properties": {
+          "column": {"type": "string"},
+          "rule": {"type": "string"},
+          "severity": {"enum": ["high", "medium", "info"]},
+          "action": {"enum": ["drop_column", "drop_duplicates", "impute_median", "impute_mode", "replace_with_nan_then_impute_median", "replace_with_nan_then_impute_mode", "replace_with_nan_and_add_flag", "convert_to_number", "convert_to_text", "standardise_case", "parse_dates_iso", "cap_outliers", "set_invalid_to_nan", "mask_pii", "review_values"]},
           "detail": {"type": "string"}
         }
       }

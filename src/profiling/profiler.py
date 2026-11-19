@@ -19,6 +19,7 @@ from src.quality.score import quality_score
 
 from .semantic import (PII_TYPES, date_parse_rate, detect_semantic,
                        infer_basic_type, numeric_parse_rate)
+from .suggestions import cleaning_suggestions
 
 REPORT_VERSION = "1.2"
 HISTOGRAM_BINS = 10
@@ -370,6 +371,7 @@ def profile_dataset(df: pd.DataFrame, dataset_name: str = "dataset") -> dict:
         },
     }
     report["quality_score"] = quality_score(report)
+    report["cleaning_suggestions"] = cleaning_suggestions(columns, report["issues"])
     # numpy numbers -> plain Python, so the report can go straight to JSON / the API
     return json.loads(json.dumps(report, default=_py))
 
