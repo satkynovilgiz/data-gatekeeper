@@ -2,10 +2,11 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://github.com/satkynovilgiz/data-gatekeeper/docs/profiling_report.schema.json",
   "title": "Data Gatekeeper — profiling_report.json",
-  "description": "Output of Module 1 (profile_dataset / profile_file / POST /profile). Report version 1.1.",
+  "description": "Output of Module 1 (profile_dataset / profile_file / POST /profile). Report version 1.2.",
   "type": "object",
   "required": ["report_version", "generated_at", "dataset", "columns", "missing_matrix",
-               "correlation", "categorical_association", "issues", "summary"],
+               "correlation", "categorical_association", "issues", "summary", "quality_score",
+               "cleaning_suggestions", "run"],
   "additionalProperties": false,
   "properties": {
     "report_version": {"type": "string", "pattern": "^\\d+\\.\\d+$"},
@@ -14,7 +15,8 @@
     "dataset": {
       "type": "object",
       "required": ["name", "rows", "columns", "memory_kb", "duplicate_rows",
-                   "total_missing_cells", "missing_cells_pct"],
+                   "total_missing_cells", "missing_cells_pct",
+                   "disguised_missing_cells", "true_missing_cells_pct"],
       "additionalProperties": false,
       "properties": {
         "name": {"type": "string"},
@@ -23,7 +25,9 @@
         "memory_kb": {"type": "number", "minimum": 0},
         "duplicate_rows": {"$ref": "#/$defs/count"},
         "total_missing_cells": {"$ref": "#/$defs/count"},
-        "missing_cells_pct": {"$ref": "#/$defs/percent"}
+        "missing_cells_pct": {"$ref": "#/$defs/percent"},
+        "disguised_missing_cells": {"$ref": "#/$defs/count", "description": "cells like 'unknown' or 999 that mean missing"},
+        "true_missing_cells_pct": {"$ref": "#/$defs/percent", "description": "(empty + disguised) / all cells"}
       }
     },
 
@@ -95,9 +99,26 @@
             "enum": ["mostly_missing", "missing_values", "constant_column", "mixed_types",
                      "potential_pii", "inconsistent_category_format", "inconsistent_date_format",
                      "outliers", "invalid_format_values", "duplicate_rows",
-                     "id_stored_as_number", "dominant_value", "placeholder_values"]
+                     "id_stored_as_number", "dominant_value", "disguised_missing"]
           },
           "severity": {"enum": ["high", "medium", "info"]},
+          "detail": {"type": "string"}
+        }
+      }
+    },
+
+    "cleaning_suggestions": {
+      "description": "Hand-off to Module 2: one suggested action per issue, most severe first",
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["column", "rule", "severity", "action", "detail"],
+        "additionalProperties": false,
+        "properties": {
+          "column": {"type": "string"},
+          "rule": {"type": "string"},
+          "severity": {"enum": ["high", "medium", "info"]},
+          "action": {"enum": ["drop_column", "drop_duplicates", "impute_median", "impute_mode", "replace_with_nan_then_impute_median", "replace_with_nan_then_impute_mode", "replace_with_nan_and_add_flag", "convert_to_number", "convert_to_text", "standardise_case", "parse_dates_iso", "cap_outliers", "set_invalid_to_nan", "mask_pii", "review_values"]},
           "detail": {"type": "string"}
         }
       }
@@ -124,10 +145,53 @@
       }
     },
 
-    "charts": {
-      "description": "Only added by the CLI (run_profiling.py): chart name -> PNG path (null if not drawn)",
+    "quality_score": {
+      "description": "Data quality 0-100 (src/quality/score.py). overall = weighted average of the dimensions",
       "type": "object",
-      "additionalProperties": {"type": ["string", "null"]}
+      "required": ["overall", "dimensions", "weights"],
+      "additionalProperties": false,
+      "properties": {
+        "overall": {"$ref": "#/$defs/percent"},
+        "dimensions": {
+          "type": "object",
+          "required": ["completeness", "uniqueness", "validity", "consistency"],
+          "additionalProperties": false,
+          "properties": {
+            "completeness": {"$ref": "#/$defs/percent"},
+            "uniqueness": {"$ref": "#/$defs/percent"},
+            "validity": {"$ref": "#/$defs/percent"},
+            "consistency": {"$ref": "#/$defs/percent"}
+          }
+        },
+        "weights": {"type": "object", "additionalProperties": {"type": "number", "minimum": 0, "maximum": 1}}
+      }
+    },
+
+    "run": {
+      "description": "How the profiling ran: time taken and whether only a random sample was profiled",
+      "type": "object",
+      "required": ["seconds", "rows_in_file", "rows_profiled", "sampled"],
+      "additionalProperties": false,
+      "properties": {
+        "seconds": {"type": "number", "minimum": 0},
+        "rows_in_file": {"$ref": "#/$defs/count"},
+        "rows_profiled": {"$ref": "#/$defs/count"},
+        "sampled": {"type": "boolean"}
+      }
+    },
+
+    "charts": {
+      "description": "Only added by the CLI (run_profiling.py): PNG file names inside the charts/ folder",
+      "type": "object",
+      "required": ["missing_heatmap", "histograms", "bar_charts"],
+      "additionalProperties": false,
+      "properties": {
+        "missing_heatmap": {"type": "string"},
+        "correlation_heatmap": {"type": "string", "description": "missing if < 2 numeric columns"},
+        "outlier_distribution": {"type": "string", "description": "missing if no numeric columns"},
+        "histograms": {"description": "numeric column -> hist_<column>.png", "$ref": "#/$defs/file_map"},
+        "bar_charts": {"description": "categorical column -> bar_<column>.png (top 10 values)", "$ref": "#/$defs/file_map"}
+      }
     }
   },
 
@@ -137,6 +201,7 @@
     "nullable_number": {"type": ["number", "null"]},
     "string_list": {"type": "array", "items": {"type": "string"}},
     "count_map": {"type": "object", "additionalProperties": {"$ref": "#/$defs/count"}},
+    "file_map": {"type": "object", "additionalProperties": {"type": "string", "pattern": "\\.png$"}},
     "matrix": {
       "description": "column -> column -> value (null when it cannot be computed)",
       "type": "object",
@@ -150,7 +215,8 @@
       "type": "object",
       "required": ["name", "pandas_dtype", "inferred_type", "semantic", "is_pii",
                    "missing_count", "missing_pct", "unique_count", "unique_pct",
-                   "value_types", "is_mixed_type", "top_value", "placeholder_values"],
+                   "value_types", "is_mixed_type", "top_value", "disguised_missing",
+                   "true_missing_count", "true_missing_pct"],
       "additionalProperties": false,
       "properties": {
         "name": {"type": "string"},
@@ -191,7 +257,19 @@
             }
           ]
         },
-        "placeholder_values": {"$ref": "#/$defs/count_map"},
+        "disguised_missing": {
+          "description": "values that mean missing but are not empty: text placeholders ('unknown', '?') and numeric sentinels (999, -1)",
+          "type": "object",
+          "required": ["count", "pct", "values"],
+          "additionalProperties": false,
+          "properties": {
+            "count": {"$ref": "#/$defs/count"},
+            "pct": {"$ref": "#/$defs/percent"},
+            "values": {"$ref": "#/$defs/count_map"}
+          }
+        },
+        "true_missing_count": {"$ref": "#/$defs/count"},
+        "true_missing_pct": {"$ref": "#/$defs/percent"},
 
         "numeric_stats": {
           "type": "object",

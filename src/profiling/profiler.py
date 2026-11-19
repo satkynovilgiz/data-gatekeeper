@@ -9,18 +9,23 @@ from __future__ import annotations
 
 import csv
 import json
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
 
+from src.quality.score import quality_score
+
 from .semantic import (PII_TYPES, date_parse_rate, detect_semantic,
                        infer_basic_type, numeric_parse_rate)
+from .suggestions import cleaning_suggestions
 
-REPORT_VERSION = "1.1"
+REPORT_VERSION = "1.2"
 HISTOGRAM_BINS = 10
 DOMINANT_VALUE_PCT = 90     # one value in more than 90% of rows -> suspicious
+SAMPLE_SEED = 42            # fixed seed: the same --sample N always picks the same rows
 
 # Text that people type instead of leaving a cell empty ("hidden" missing values).
 # Compared after strip() + lower(). pandas already turns "", "NA", "null"... into NaN
@@ -28,9 +33,14 @@ DOMINANT_VALUE_PCT = 90     # one value in more than 90% of rows -> suspicious
 PLACEHOLDERS = {"unknown", "unk", "n/a", "na", "none", "null", "nan", "?", "-", "--",
                 "missing", "not available", "undefined", ""}
 
+# Numbers that people use as a code for "no value" (e.g. pdays = 999 means
+# "never contacted"). They only count as missing when they sit far outside the
+# column's normal range — see _numeric_sentinels().
+NUMERIC_SENTINELS = [999, 9999, 99999, -1, -99, -999, -9999]
+
 # Rules that mark a column as "suspicious" in the summary
 SUSPICIOUS_RULES = {"id_stored_as_number", "dominant_value", "constant_column",
-                    "placeholder_values"}
+                    "disguised_missing"}
 
 
 # ---------------------------------------------------------------- helpers
@@ -45,21 +55,17 @@ def _py(v):
     return v
 
 def _value_types(series: pd.Series) -> dict:
-    """Count Python types of the non-null values, e.g. {'float': 480, 'str': 15}.
+    """Count how many non-null values look like a number vs text, e.g. {'number': 480, 'text': 15}.
 
     Values read from CSV are all strings, so we classify each one by what it
-    *looks like* (number vs text) instead of trusting the Python type.
+    *looks like* instead of trusting the Python type.
+    Sprint 3: one pd.to_numeric call for the whole column (vectorised) instead of
+    one call per value. Profiling the 41k-row bank dataset went from ~5 s to ~2.5 s.
     """
-    counts: dict[str, int] = {}
-    for v in series.dropna():
-        if isinstance(v, str):
-            t = "number" if pd.notna(pd.to_numeric(v, errors="coerce")) else "text"
-        elif isinstance(v, (int, float, np.integer, np.floating)):
-            t = "number"
-        else:
-            t = type(v).__name__
-        counts[t] = counts.get(t, 0) + 1
-    return counts
+    s = series.dropna()
+    is_number = pd.to_numeric(s, errors="coerce").notna()
+    counts = {"number": int(is_number.sum()), "text": int((~is_number).sum())}
+    return {k: v for k, v in counts.items() if v}     # drop zero counts
 
 
 def _histogram(s: pd.Series, bins: int = HISTOGRAM_BINS) -> dict:
@@ -77,14 +83,21 @@ def _numeric_stats(s: pd.Series) -> dict:
         return {}
     q1, q3 = s.quantile(0.25), s.quantile(0.75)
     iqr = q3 - q1
-    lo, hi = q1 - 1.5 * iqr, q3 + 1.5 * iqr
-    outliers = s[(s < lo) | (s > hi)]
+    if iqr > 0:
+        lo, hi = q1 - 1.5 * iqr, q3 + 1.5 * iqr
+        outliers = s[(s < lo) | (s > hi)]
+    else:
+        # IQR = 0 means at least half the values are identical (e.g. previous = 0).
+        # Then the fences collapse to one point and EVERY other value would be an
+        # "outlier", so the IQR method is not usable: report no fences, no outliers.
+        lo = hi = None
+        outliers = s.iloc[:0]
     return {
         "mean": _py(s.mean()), "std": _py(s.std()), "min": _py(s.min()),
         "p25": _py(q1), "median": _py(s.median()), "p75": _py(q3), "max": _py(s.max()),
         "skew": _py(s.skew()),
         "outliers_iqr": {"count": int(len(outliers)),
-                         "pct": _py(len(outliers) / len(s) * 100),
+                         "pct": round(len(outliers) / len(s) * 100, 2),
                          "lower_fence": _py(lo), "upper_fence": _py(hi)},
         "histogram": _histogram(s),
     }
@@ -119,11 +132,44 @@ def _top_value(s: pd.Series) -> dict | None:
     return {"value": vc.index[0], "pct": round(vc.iloc[0] / vc.sum() * 100, 2)}
 
 
-def _placeholder_values(s: pd.Series) -> dict:
+def _text_placeholders(s: pd.Series) -> dict:
     """Count placeholder texts like 'unknown' or '?', e.g. {"unknown": 8597}."""
     text = s.dropna().astype(str)
     hits = text[text.str.strip().str.lower().isin(PLACEHOLDERS)]
     return {k: int(v) for k, v in hits.value_counts().items()}
+
+
+def _numeric_sentinels(s: pd.Series) -> dict:
+    """Find "magic numbers" that mean missing, e.g. {"999": 39673} for pdays.
+
+    A candidate from NUMERIC_SENTINELS only counts when it is clearly separate
+    from the real values, so a genuine 999 in a column of salaries is NOT flagged:
+      - positive (999, 9999): bigger than 2 x the largest other value
+      - negative (-1, -999):  all other values are >= 0
+    Returns the original text of the cells, so Module 2 knows exactly what to replace.
+    """
+    nums = pd.to_numeric(s, errors="coerce")
+    found = {}
+    for v in NUMERIC_SENTINELS:
+        is_v = nums == v
+        others = nums[~is_v].dropna()
+        if not is_v.any() or others.empty:
+            continue
+        if (v > 0 and v > 2 * others.max()) or (v < 0 and others.min() >= 0):
+            for text, n in s[is_v].astype(str).value_counts().items():
+                found[text] = int(n)
+    return found
+
+
+def _disguised_missing(s: pd.Series, numeric: bool) -> dict:
+    """Values that mean "missing" but are not empty: placeholder text + numeric sentinels."""
+    values = _text_placeholders(s)
+    if numeric:
+        values.update(_numeric_sentinels(s))
+    count = sum(values.values())
+    return {"count": count,
+            "pct": round(count / len(s) * 100, 2) if len(s) else 0.0,
+            "values": values}
 
 
 def _date_formats(s: pd.Series) -> dict:
@@ -173,6 +219,9 @@ def profile_column(name: str, series: pd.Series) -> dict:
     semantic = detect_semantic(name, series, basic)
     nunique = int(series.nunique(dropna=True))
     vtypes = _value_types(series)
+    is_numeric = basic == "numeric" or numeric_parse_rate(series) >= 0.8
+    disguised = _disguised_missing(series, is_numeric)
+    true_missing = missing + disguised["count"]
 
     col = {
         "name": name,
@@ -187,10 +236,14 @@ def profile_column(name: str, series: pd.Series) -> dict:
         "value_types": vtypes,
         "is_mixed_type": len(vtypes) > 1,
         "top_value": _top_value(series),
-        "placeholder_values": _placeholder_values(series),
+        # hidden missing values ("unknown", "?", 999, -1 ...) and the honest total
+        "disguised_missing": disguised,
+        "true_missing_count": true_missing,
+        "true_missing_pct": round(true_missing / n * 100, 2) if n else 0.0,
     }
-    if basic == "numeric" or numeric_parse_rate(series) >= 0.8:
-        col["numeric_stats"] = _numeric_stats(series)
+    if is_numeric:
+        # stats WITHOUT the sentinels: pdays has mean ~962 with 999 included, which is meaningless
+        col["numeric_stats"] = _numeric_stats(series[~series.isin(list(disguised["values"]))])
     if basic in ("categorical", "text"):
         col["categorical_stats"] = _categorical_stats(series)
     if semantic["semantic_type"] == "date":
@@ -239,15 +292,19 @@ def run_rules(df: pd.DataFrame, columns: list[dict]) -> list[dict]:
                 "identifier stored as a number — store as text (no maths on IDs, "
                 "leading zeros are kept)")
         top = c["top_value"]
-        if top and c["unique_count"] > 1 and top["pct"] > DOMINANT_VALUE_PCT:
+        dis = c["disguised_missing"]
+        # (if the dominant value is already known to be a missing code, the
+        #  disguised_missing rule below explains it — no need for two issues)
+        if (top and c["unique_count"] > 1 and top["pct"] > DOMINANT_VALUE_PCT
+                and top["value"] not in dis["values"]):
             add(name, "dominant_value", "medium",
                 f"{top['pct']}% of values are '{top['value']}' — almost constant, "
                 f"or a placeholder/magic number")
-        if c["placeholder_values"]:
-            n_ph = sum(c["placeholder_values"].values())
-            add(name, "placeholder_values", "medium",
-                f"{n_ph} values ({round(n_ph / len(df) * 100, 2)}%) look like hidden "
-                f"missing data: {c['placeholder_values']}")
+        if dis["count"]:
+            add(name, "disguised_missing", "high" if c["true_missing_pct"] >= 50 else "medium",
+                f"{dis['count']} values ({dis['pct']}%) mean 'missing' but are not empty: "
+                f"{dis['values']} — true missing {c['true_missing_pct']}% "
+                f"(empty {c['missing_pct']}% + disguised {dis['pct']}%)")
 
         if sem in ("email", "phone", "postcode") and c["semantic"]["confidence"] < 0.99:
             bad = round((1 - c["semantic"]["confidence"]) * 100, 1)
@@ -261,12 +318,42 @@ def run_rules(df: pd.DataFrame, columns: list[dict]) -> list[dict]:
 
 
 # --------------------------------------------------------------- dataset
-def profile_dataset(df: pd.DataFrame, dataset_name: str = "dataset") -> dict:
+def numeric_frame(df: pd.DataFrame, columns: list[dict]) -> pd.DataFrame:
+    """Numeric columns as numbers, with disguised missing values (999, 'unknown') set to NaN.
+
+    Used for the correlation matrix and the outlier chart, so they agree with numeric_stats.
+    """
+    out = {}
+    for c in columns:
+        if c.get("numeric_stats"):
+            s = df[c["name"]].mask(df[c["name"]].isin(list(c["disguised_missing"]["values"])))
+            out[c["name"]] = pd.to_numeric(s, errors="coerce")
+    return pd.DataFrame(out, index=df.index)
+
+
+def sample_rows(df: pd.DataFrame, n: int | None, seed: int = SAMPLE_SEED) -> pd.DataFrame:
+    """Random sample of n rows (same rows every time thanks to the seed).
+
+    Returns df unchanged if n is None or the file is already that small.
+    """
+    if n is None or n >= len(df):
+        return df
+    if n < 1:
+        raise ValueError("sample size must be at least 1")
+    return df.sample(n=n, random_state=seed)
+
+
+def profile_dataset(df: pd.DataFrame, dataset_name: str = "dataset",
+                    rows_in_file: int | None = None) -> dict:
+    """Profile a DataFrame (read with dtype=str) and return the report dict.
+
+    rows_in_file: total rows before sampling (only set when df is a sample).
+    """
+    start = time.perf_counter()
     columns = [profile_column(c, df[c]) for c in df.columns]
 
-    numeric_cols = [c["name"] for c in columns if "numeric_stats" in c]
-    num_df = df[numeric_cols].apply(pd.to_numeric, errors="coerce")
-    corr = num_df.corr().round(3) if len(numeric_cols) > 1 else pd.DataFrame()
+    num_df = numeric_frame(df, columns)      # disguised missing values -> NaN
+    corr = num_df.corr().round(3) if num_df.shape[1] > 1 else pd.DataFrame()
     strong = []
     for i, a in enumerate(corr.columns):
         for b in corr.columns[i + 1:]:
@@ -275,6 +362,8 @@ def profile_dataset(df: pd.DataFrame, dataset_name: str = "dataset") -> dict:
                 strong.append({"a": a, "b": b, "corr": float(v)})
 
     total_cells = df.size or 1
+    disguised_cells = sum(c["disguised_missing"]["count"] for c in columns)
+    real_missing = int(df.isna().sum().sum())
     report = {
         "report_version": REPORT_VERSION,
         "generated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
@@ -284,8 +373,10 @@ def profile_dataset(df: pd.DataFrame, dataset_name: str = "dataset") -> dict:
             "columns": int(df.shape[1]),
             "memory_kb": round(df.memory_usage(deep=True).sum() / 1024, 1),
             "duplicate_rows": int(df.duplicated().sum()),
-            "total_missing_cells": int(df.isna().sum().sum()),
-            "missing_cells_pct": round(df.isna().sum().sum() / total_cells * 100, 2),
+            "total_missing_cells": real_missing,
+            "missing_cells_pct": round(real_missing / total_cells * 100, 2),
+            "disguised_missing_cells": disguised_cells,
+            "true_missing_cells_pct": round((real_missing + disguised_cells) / total_cells * 100, 2),
         },
         "columns": columns,
         "missing_matrix": {c: int(df[c].isna().sum()) for c in df.columns},
@@ -306,6 +397,15 @@ def profile_dataset(df: pd.DataFrame, dataset_name: str = "dataset") -> dict:
             sev: sum(1 for i in report["issues"] if i["severity"] == sev)
             for sev in ("high", "medium", "info")
         },
+    }
+    report["quality_score"] = quality_score(report)
+    report["cleaning_suggestions"] = cleaning_suggestions(columns, report["issues"])
+    rows_in_file = rows_in_file or len(df)
+    report["run"] = {
+        "seconds": round(time.perf_counter() - start, 2),   # profiling time (no file reading, no charts)
+        "rows_in_file": int(rows_in_file),
+        "rows_profiled": int(len(df)),
+        "sampled": bool(len(df) < rows_in_file),
     }
     # numpy numbers -> plain Python, so the report can go straight to JSON / the API
     return json.loads(json.dumps(report, default=_py))
@@ -331,11 +431,16 @@ def read_csv_raw(path: str | Path) -> pd.DataFrame:
                        keep_default_na=True, encoding_errors="replace")
 
 
-def profile_file(path: str | Path, dataset_name: str | None = None) -> dict:
-    """Read a CSV file and return its profiling report (dict)."""
+def profile_file(path: str | Path, dataset_name: str | None = None,
+                 sample: int | None = None) -> dict:
+    """Read a CSV file and return its profiling report (dict).
+
+    sample: profile only this many random rows (faster for big files).
+    """
     path = Path(path)
     df = read_csv_raw(path)
-    return profile_dataset(df, dataset_name=dataset_name or path.name)
+    return profile_dataset(sample_rows(df, sample), dataset_name=dataset_name or path.name,
+                           rows_in_file=len(df))
 
 
 def save_report(report: dict, out_dir: str | Path) -> Path:

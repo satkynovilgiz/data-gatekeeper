@@ -46,6 +46,8 @@ def test_cli_report_with_charts_matches_schema(tmp_path):
                    cwd=ROOT, check=True, capture_output=True)
     report = json.loads((tmp_path / "profiling_report.json").read_text())
     assert "charts" in report
+    assert "pdays" in report["charts"]["histograms"]
+    assert "job" in report["charts"]["bar_charts"]
     assert_valid(report)
 
 

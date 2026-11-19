@@ -22,13 +22,14 @@ def test_text_ids_are_fine():
 
 
 def test_dominant_value():
-    # like "pdays = 999" in the bank dataset: 95 of 100 rows have the same value
-    df = pd.DataFrame({"pdays": ["999"] * 95 + ["3", "4", "5", "6", "7"],
+    # 95 of 100 rows have the same value (and it is NOT a missing code like 999,
+    # which is reported by disguised_missing instead — see test_disguised_missing.py)
+    df = pd.DataFrame({"campaign": ["1"] * 95 + ["3", "4", "5", "6", "7"],
                        "city": ["A", "B"] * 50})
     r = profile_dataset(df)
-    col = next(c for c in r["columns"] if c["name"] == "pdays")
-    assert col["top_value"] == {"value": "999", "pct": 95.0}
-    assert ("pdays", "dominant_value") in _rules(r)
+    col = next(c for c in r["columns"] if c["name"] == "campaign")
+    assert col["top_value"] == {"value": "1", "pct": 95.0}
+    assert ("campaign", "dominant_value") in _rules(r)
     assert ("city", "dominant_value") not in _rules(r)
 
 
@@ -44,8 +45,8 @@ def test_placeholder_values():
     df = pd.DataFrame({"education": ["uni", "school", "unknown", "Unknown ", "?", "uni"]})
     r = profile_dataset(df)
     col = r["columns"][0]
-    assert col["placeholder_values"] == {"unknown": 1, "Unknown ": 1, "?": 1}
-    assert ("education", "placeholder_values") in _rules(r)
+    assert col["disguised_missing"]["values"] == {"unknown": 1, "Unknown ": 1, "?": 1}
+    assert ("education", "disguised_missing") in _rules(r)
 
 
 def test_suspicious_columns_summary():

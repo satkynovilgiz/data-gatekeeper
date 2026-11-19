@@ -22,7 +22,7 @@ Status: ✅ done · 🔄 in progress · ⏳ planned
 
 **Deliverable:** `python run_profiling.py --input data/raw/hr_employees_messy.csv` produces `profiling_report.json` and charts.
 
-### Sprint 2 🔄 — Real dataset + profiling API
+### Sprint 2 ✅ — Real dataset + profiling API
 - Pick a real public finance dataset (UCI Bank Marketing) + download script + `docs/dataset.md`
 - `profile_file(path)` function + FastAPI `POST /profile` endpoint
 - Better profiling: histograms, top categories, Cramér's V, stronger PII detection, suspicious-column rules
@@ -31,15 +31,17 @@ Status: ✅ done · 🔄 in progress · ⏳ planned
 
 **Deliverable:** the profiler runs on the real dataset (CLI and API); `pytest -q` is green; `docs/sprint2_summary.md`.
 
-### Sprint 3 ⏳ — Polish Module 1 + hand-off to Module 2
-- Speed: vectorise the per-value type check (41k rows takes ~10 s now) + sampling for big files
-- Hidden missing values: count placeholders (`unknown`) in `missing_pct`; detect numeric magic numbers (`999`, `-1`)
-- Fix outlier rule when IQR = 0 (e.g. `pdays`, `previous` flag every non-mode value)
-- Simple HTML report (one page) built from the JSON
-- Clean up the code, add type hints and docstrings everywhere
-- Module 1 presentation
+### Sprint 3 ✅ — Polish Module 1 + hand-off to Module 2
+- ✅ Speed: vectorised the per-value type check (41k rows: 5.1 s → 2.5 s) + `--sample N` for big files
+- ✅ Disguised missing values: placeholder text (`unknown`, `?`, `-`) + numeric sentinels (`999`, `-1`), `true_missing_pct`
+- ✅ Fixed the outlier rule when IQR = 0; stats/correlation ignore sentinels
+- ✅ Histogram per numeric column, top-10 bar chart per categorical column
+- ✅ Data quality score 0–100 (`src/quality/score.py`) — reused by Module 2 for the before/after delta
+- ✅ `cleaning_suggestions` with action codes = the input for Module 2
+- ✅ Module 1 presentation (`docs/module1_presentation.md`) + `docs/sprint3_summary.md`
+- ➡️ Moved: one-page HTML report → Module 4 (Sprint 12 demo); full type-hint pass → ongoing
 
-**Deliverable:** Module 1 v2 + presentation; the report is the "to-do list" input for Module 2.
+**Deliverable:** Module 1 v1.2 + presentation; the report is the "to-do list" input for Module 2.
 
 ---
 
