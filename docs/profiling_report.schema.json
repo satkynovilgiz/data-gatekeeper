@@ -5,7 +5,7 @@
   "description": "Output of Module 1 (profile_dataset / profile_file / POST /profile). Report version 1.2.",
   "type": "object",
   "required": ["report_version", "generated_at", "dataset", "columns", "missing_matrix",
-               "correlation", "categorical_association", "issues", "summary"],
+               "correlation", "categorical_association", "issues", "summary", "quality_score"],
   "additionalProperties": false,
   "properties": {
     "report_version": {"type": "string", "pattern": "^\\d+\\.\\d+$"},
@@ -124,6 +124,28 @@
             "info": {"$ref": "#/$defs/count"}
           }
         }
+      }
+    },
+
+    "quality_score": {
+      "description": "Data quality 0-100 (src/quality/score.py). overall = weighted average of the dimensions",
+      "type": "object",
+      "required": ["overall", "dimensions", "weights"],
+      "additionalProperties": false,
+      "properties": {
+        "overall": {"$ref": "#/$defs/percent"},
+        "dimensions": {
+          "type": "object",
+          "required": ["completeness", "uniqueness", "validity", "consistency"],
+          "additionalProperties": false,
+          "properties": {
+            "completeness": {"$ref": "#/$defs/percent"},
+            "uniqueness": {"$ref": "#/$defs/percent"},
+            "validity": {"$ref": "#/$defs/percent"},
+            "consistency": {"$ref": "#/$defs/percent"}
+          }
+        },
+        "weights": {"type": "object", "additionalProperties": {"type": "number", "minimum": 0, "maximum": 1}}
       }
     },
 

@@ -15,6 +15,8 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
+from src.quality.score import quality_score
+
 from .semantic import (PII_TYPES, date_parse_rate, detect_semantic,
                        infer_basic_type, numeric_parse_rate)
 
@@ -367,6 +369,7 @@ def profile_dataset(df: pd.DataFrame, dataset_name: str = "dataset") -> dict:
             for sev in ("high", "medium", "info")
         },
     }
+    report["quality_score"] = quality_score(report)
     # numpy numbers -> plain Python, so the report can go straight to JSON / the API
     return json.loads(json.dumps(report, default=_py))
 
