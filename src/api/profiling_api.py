@@ -26,7 +26,7 @@ app = FastAPI(
 
 
 @app.get("/health")
-def health() -> dict:
+def health() -> dict[str, str]:
     """Simple check that the server is running."""
     return {"status": "ok"}
 

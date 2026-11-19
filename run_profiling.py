@@ -15,7 +15,7 @@ from src.profiling.visualize import make_all
 log = logging.getLogger("profiling")
 
 
-def main():
+def main() -> None:
     ap = argparse.ArgumentParser(description="Profile a CSV dataset (Module 1)")
     ap.add_argument("--input", required=True, help="path to a CSV file")
     ap.add_argument("--output", default="results", help="folder for the report and charts")
