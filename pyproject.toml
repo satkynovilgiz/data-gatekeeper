@@ -9,13 +9,14 @@ extend-exclude = ["results", "data"]
 # E/W = style errors and warnings (pycodestyle), F = real mistakes (pyflakes:
 # unused imports, undefined names), I = sorted imports, B = likely bugs (bugbear),
 # UP = old syntax that has a newer form
-select = ["E", "W", "F", "I", "B", "UP", "ANN"]
+select = ["E", "W", "F", "I", "B", "UP", "ANN", "D103"]
 # ANN = every function needs type hints. Any is allowed (e.g. JSON helpers).
+# D103 = every public function needs a docstring.
 ignore = ["ANN401"]
 
 [tool.ruff.lint.per-file-ignores]
 # tests and one-off scripts do not need type hints
-"tests/**" = ["ANN"]
+"tests/**" = ["ANN", "D103"]
 "scripts/**" = ["ANN"]
 
 [tool.ruff.lint.flake8-bugbear]

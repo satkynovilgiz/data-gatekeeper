@@ -38,6 +38,8 @@ def download() -> bytes:
 
 
 def main():
+    """Download the full Bank Marketing CSV into data/raw/ (and the 1,000-row sample
+    when --sample is given)."""
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--sample", action="store_true",
                     help=f"also write {SAMPLE_ROWS} random rows to {SAMPLE_PATH.name}")

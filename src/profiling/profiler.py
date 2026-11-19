@@ -221,6 +221,13 @@ def categorical_association(df: pd.DataFrame, columns: list[dict],
 
 # ---------------------------------------------------------- column profile
 def profile_column(name: str, series: pd.Series) -> dict:
+    """Profile one column.
+
+    Input:  the column name and its values (read as text).
+    Output: a dict with type, meaning (semantic), PII flag, missing and disguised
+            missing counts, unique counts, top value, and numeric / categorical /
+            date statistics where they apply (see the "column" part of the schema).
+    """
     n = len(series)
     missing = int(series.isna().sum())
     basic = infer_basic_type(series)
@@ -454,6 +461,10 @@ def profile_file(path: str | Path, dataset_name: str | None = None,
 
 
 def save_report(report: dict, out_dir: str | Path) -> Path:
+    """Write the report as pretty JSON to <out_dir>/profiling_report.json.
+
+    Creates out_dir if needed and returns the path of the written file.
+    """
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     path = out_dir / "profiling_report.json"

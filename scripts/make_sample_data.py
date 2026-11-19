@@ -35,6 +35,7 @@ df["hire_date"] = df["hire_date"].dt.strftime("%Y-%m-%d")
 
 # ---- Inject realistic mess ----
 def pick(frac):
+    """Return random row positions covering `frac` of the N rows (e.g. 0.08 = 8%)."""
     return rng.choice(N, int(N * frac), replace=False)
 
 df.loc[pick(0.08), "salary"] = np.nan                       # missing values

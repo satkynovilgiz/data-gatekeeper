@@ -21,6 +21,10 @@ from .profiler import numeric_frame
 
 
 def missing_heatmap(df: pd.DataFrame, path: Path) -> Path:
+    """Draw a rows x columns grid where dark cells are empty; save it to path (PNG).
+
+    Note: it only shows real empty cells, not disguised ones like "unknown".
+    """
     fig, ax = plt.subplots(figsize=(max(6, df.shape[1] * 0.6), 5))
     ax.imshow(df.isna().values, aspect="auto", cmap="Greys", interpolation="nearest")
     ax.set_xticks(range(df.shape[1]))
@@ -34,6 +38,10 @@ def missing_heatmap(df: pd.DataFrame, path: Path) -> Path:
 
 
 def correlation_heatmap(num_df: pd.DataFrame, path: Path) -> Path | None:
+    """Draw the Pearson correlation matrix of the numeric columns and save it to path.
+
+    Returns None (no file) when there are fewer than 2 numeric columns.
+    """
     if num_df.shape[1] < 2:
         return None
     corr = num_df.corr()
@@ -57,6 +65,10 @@ def correlation_heatmap(num_df: pd.DataFrame, path: Path) -> Path | None:
 
 
 def outlier_boxplots(num_df: pd.DataFrame, path: Path) -> Path | None:
+    """Draw one boxplot per numeric column (as z-scores, so scales are comparable).
+
+    Saves to path; returns None (no file) when there are no numeric columns.
+    """
     if num_df.empty:
         return None
     # standardise so columns with different scales fit one chart

@@ -16,6 +16,12 @@ log = logging.getLogger("profiling")
 
 
 def main() -> None:
+    """Parse the command line, profile the CSV, draw charts and save the report.
+
+    Input:  --input CSV path, --output folder, optional --sample N.
+    Output: <output>/profiling_report.json and <output>/charts/*.png, plus a summary
+            printed to the console and timings in the log.
+    """
     ap = argparse.ArgumentParser(description="Profile a CSV dataset (Module 1)")
     ap.add_argument("--input", required=True, help="path to a CSV file")
     ap.add_argument("--output", default="results", help="folder for the report and charts")
