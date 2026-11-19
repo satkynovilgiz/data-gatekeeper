@@ -128,9 +128,17 @@
     },
 
     "charts": {
-      "description": "Only added by the CLI (run_profiling.py): chart name -> PNG path (null if not drawn)",
+      "description": "Only added by the CLI (run_profiling.py): PNG file names inside the charts/ folder",
       "type": "object",
-      "additionalProperties": {"type": ["string", "null"]}
+      "required": ["missing_heatmap", "histograms", "bar_charts"],
+      "additionalProperties": false,
+      "properties": {
+        "missing_heatmap": {"type": "string"},
+        "correlation_heatmap": {"type": "string", "description": "missing if < 2 numeric columns"},
+        "outlier_distribution": {"type": "string", "description": "missing if no numeric columns"},
+        "histograms": {"description": "numeric column -> hist_<column>.png", "$ref": "#/$defs/file_map"},
+        "bar_charts": {"description": "categorical column -> bar_<column>.png (top 10 values)", "$ref": "#/$defs/file_map"}
+      }
     }
   },
 
@@ -140,6 +148,7 @@
     "nullable_number": {"type": ["number", "null"]},
     "string_list": {"type": "array", "items": {"type": "string"}},
     "count_map": {"type": "object", "additionalProperties": {"$ref": "#/$defs/count"}},
+    "file_map": {"type": "object", "additionalProperties": {"type": "string", "pattern": "\\.png$"}},
     "matrix": {
       "description": "column -> column -> value (null when it cannot be computed)",
       "type": "object",

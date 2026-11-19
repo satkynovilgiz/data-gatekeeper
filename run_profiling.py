@@ -21,8 +21,7 @@ def main():
     df = read_csv_raw(args.input)
 
     report = profile_dataset(df, dataset_name=Path(args.input).name)
-    numeric_cols = [c["name"] for c in report["columns"] if "numeric_stats" in c]
-    report["charts"] = make_all(df, numeric_cols, Path(args.output) / "charts")
+    report["charts"] = make_all(df, report, Path(args.output) / "charts")
     path = save_report(report, args.output)
 
     d, s = report["dataset"], report["summary"]
