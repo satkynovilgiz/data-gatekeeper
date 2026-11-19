@@ -37,8 +37,8 @@ def test_real_bank_sample():
     r = profile_file(SAMPLE)
     assert r["dataset"]["rows"] == 1000 and r["dataset"]["columns"] == 21
     rules = {(i["column"], i["rule"]) for i in r["issues"]}
-    assert ("pdays", "dominant_value") in rules           # pdays = 999 for almost everyone
-    assert ("default", "placeholder_values") in rules     # 'unknown' = hidden missing
+    assert ("pdays", "disguised_missing") in rules        # pdays = 999 = "never contacted"
+    assert ("default", "disguised_missing") in rules      # 'unknown' = hidden missing
     assert r["summary"]["pii_columns"] == []              # dataset is anonymised
     ids = [c["name"] for c in r["columns"] if c["semantic"]["semantic_type"] == "id"]
     assert ids == []                                      # cons.price.idx is not an ID
