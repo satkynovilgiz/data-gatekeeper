@@ -11,7 +11,7 @@ raw.csv ──► Module 1: Profile ──► Module 2: Clean ──► Module 3
 
 | Module | Status | Output |
 |---|---|---|
-| 1. Profiling & Metadata Intelligence | ✅ v1.1 (Sprint 2): CLI + API + JSON Schema | `profiling_report.json` + charts |
+| 1. Profiling & Metadata Intelligence | ✅ **complete** (v1.2, Sprint 3): CLI + API + JSON Schema, disguised missing, quality score, cleaning suggestions | `profiling_report.json` + charts |
 | 2. Cleaning & Transformation | ⏳ next | `cleaned_data.csv`, `cleaning_log.json` |
 | 3. AI Validation & Anomaly Detection | ⏳ | `validation_report.json` |
 | 4. Integration, CLI & Docker | ⏳ | `python pipeline.py --input ... --output ...` |
@@ -24,7 +24,8 @@ source .venv/bin/activate          # Windows: .venv\Scripts\activate
 pip install -r requirements.txt
 
 python scripts/download_bank_marketing.py    # real finance dataset (UCI Bank Marketing, 41k rows)
-python run_profiling.py --input data/raw/bank_marketing.csv --output results/bank
+python run_profiling.py --input data/raw/bank_marketing.csv --output results/bank   # ~3.5 s
+python run_profiling.py --input data/raw/bank_marketing.csv --output results/quick --sample 5000
 pytest -q                                     # run the tests
 ```
 
@@ -42,12 +43,27 @@ The report format is a JSON Schema: [`docs/profiling_report.schema.json`](docs/p
 CLI output:
 ```
 results/bank/
-├── profiling_report.json
+├── profiling_report.json     # stats, issues, quality_score, cleaning_suggestions
 └── charts/
     ├── missing_heatmap.png
     ├── correlation_heatmap.png
-    └── outlier_distribution.png
+    ├── outlier_distribution.png
+    ├── hist_<column>.png     # one per numeric column
+    └── bar_<column>.png      # one per categorical column (top 10)
 ```
+
+### Module 1 results on Bank Marketing (41,188 rows × 21 columns)
+| | |
+|---|---|
+| Empty cells (what pandas sees) | 0.0% |
+| **Disguised missing** (`unknown`, `pdays = 999`) | **52,391 cells → true missing 6.06%** in 7 columns |
+| Duplicate rows | 12 |
+| PII columns | none (anonymised data) |
+| Issues | 13 (2 high, 11 medium) → 13 cleaning suggestions |
+| **Quality score** | **98.48 / 100** (completeness 93.94, uniqueness 99.97, validity 100, consistency 100) |
+| Run time | 2.5 s profiling, 3.5 s with charts |
+
+Details: [`docs/module1_profiling.md`](docs/module1_profiling.md) · slides: [`docs/module1_presentation.md`](docs/module1_presentation.md)
 
 ## Project structure
 
@@ -62,7 +78,10 @@ data-gatekeeper/
 │   ├── profiling/            # Module 1
 │   │   ├── semantic.py       #   type + meaning detection (email, phone, card, IP, DOB, id, PII)
 │   │   ├── profiler.py       #   profile_file / profile_dataset + rule engine -> report dict
+│   │   ├── suggestions.py    #   issues -> cleaning suggestions (hand-off to Module 2)
 │   │   └── visualize.py      #   backend charts (PNG)
+│   ├── quality/
+│   │   └── score.py          #   data quality score 0-100 (shared by Module 1 and 2)
 │   ├── cleaning/             # Module 2 (to build)
 │   └── validation/           # Module 3 (to build)
 ├── tests/                    # pytest
