@@ -33,6 +33,14 @@ python run_profiling.py --input data/raw/bank_marketing.csv --output results/qui
 pytest -q                                     # run the tests
 ```
 
+### Shortcuts (Makefile)
+| Command | Does |
+|---|---|
+| `make install` | install `requirements.txt` |
+| `make test` | run all tests (`pytest -q`) |
+| `make lint` | check the code with ruff |
+| `make profile-sample` | profile the 1,000-row sample → `results/sample/` |
+
 No internet? Use the committed 1,000-row sample `data/raw/bank_marketing_sample.csv`,
 or the synthetic HR data (`python scripts/make_sample_data.py`). Dataset details: [`docs/dataset.md`](docs/dataset.md).
 
