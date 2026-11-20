@@ -407,6 +407,21 @@ def feature_columns(run: CleaningRun) -> list[str]:
     return out
 
 
+def learning_frame(run: CleaningRun) -> pd.DataFrame:
+    """A copy of the data where FLAGGED outliers are hidden (NaN), for the imputers to learn from.
+
+    With the default action "flag", salary 9,999,999 stays in the output. If the imputers
+    learned from it, MICE filled missing HR salaries with ~187,000 instead of ~80,000.
+    So they learn from typical values only; the output keeps the flagged values unchanged.
+    """
+    df = run.df.copy()
+    for c in outlier_columns(run):
+        flag = f"{c}_outlier"
+        if flag in df.columns:
+            df[c] = df[c].mask(df[flag] == 1)
+    return df
+
+
 def impute(run: CleaningRun) -> None:
     """Step 12: fill the remaining NaN with each column's method (median/mode or ML).
 
@@ -419,11 +434,14 @@ def impute(run: CleaningRun) -> None:
         if strategy != "none" and run.df[c].isna().any() and run.df[c].notna().any():
             by_method.setdefault(strategy, []).append(c)
     features = feature_columns(run)
+    learn = learning_frame(run)
     for method, targets in by_method.items():
-        filled = impute_columns(run.df, targets, features, method)
+        filled = impute_columns(learn, targets, features, method)
         for c in targets:
-            s, new = run.df[c], filled[c]
+            s = run.df[c]
             gaps = s.isna()
+            new = s.copy() if not is_numeric(s) else s.astype(float)
+            new[gaps] = filled.loc[gaps, c]                 # only the real gaps are filled
             if method in ("median", "mean", "mode"):
                 # one value for every gap: show it, e.g. "median = 42" or "mode = Rome"
                 label = method if is_numeric(s) or method == "mode" else "mode"
@@ -655,8 +673,8 @@ def clean_dataset(df: pd.DataFrame, report: dict,
             # score the imputers on this data: cleaned, but nothing filled in yet
             t0 = time.perf_counter()
             features = feature_columns(run)
-            evaluation = evaluate_imputers(
-                run.df, [c for c in features if c not in run.no_impute], features)
+            evaluation = evaluate_imputers(       # without flagged outliers, as impute()
+                learning_frame(run), [c for c in features if c not in run.no_impute], features)
             eval_seconds = time.perf_counter() - t0
         step(run)
     run.df = _whole_numbers_as_int(run.df)

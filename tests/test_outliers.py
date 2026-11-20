@@ -90,3 +90,19 @@ def test_special_code_column_is_not_touched():
 def test_unknown_outlier_action_rejected():
     with pytest.raises(ValueError, match="unknown outlier action"):
         clean(staff(), outlier_action="delete")
+
+
+@pytest.mark.parametrize("method", ["median", "knn", "regression", "iterative"])
+def test_flagged_outliers_do_not_distort_imputation(method):
+    # Found on the HR sample: MICE learned from salary 9,999,999 (flagged, kept) and filled
+    # missing salaries with ~187,000. Imputers must learn from typical values only.
+    rng = np.random.default_rng(1)
+    age = rng.integers(25, 60, 200)
+    df = pd.DataFrame({"age": age.astype(str),
+                       "salary": (age * 2000 + rng.normal(0, 3000, 200)).round().astype(int)
+                       .astype(str)})
+    df.loc[[5, 6, 7], "salary"] = "9999999"
+    df.loc[[10, 11], "salary"] = None
+    cleaned, _ = clean(df, numeric_strategy=method, categorical_strategy=method)
+    assert cleaned.loc[[5, 6, 7], "salary"].tolist() == [9_999_999] * 3   # flagged, kept
+    assert cleaned.loc[[10, 11], "salary"].between(40_000, 130_000).all()

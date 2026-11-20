@@ -147,11 +147,12 @@ def test_default_imputer_is_iterative():
 
 
 def test_impute_median_for_numbers_and_mode_for_categories():
-    df = pd.DataFrame({"age": ["20", "30", None, "40", "100"],
+    # (no outliers here: flagged outliers are hidden from the imputers, see test_outliers.py)
+    df = pd.DataFrame({"age": ["20", "30", None, "40", "60"],
                        "colour": ["red", "red", "blue", None, "red"]}, dtype=str)
     cleaned, log = clean_dataset(df, profile_dataset(df, "t.csv"),
                                  {"numeric_strategy": "median", "categorical_strategy": "mode"})
-    assert cleaned["age"].tolist() == [20, 30, 35, 40, 100]           # median of 20,30,40,100
+    assert cleaned["age"].tolist() == [20, 30, 35, 40, 60]            # median of 20,30,40,60
     assert cleaned["colour"].tolist()[3] == "red"                      # mode
     rules = {s["column"]: s["rule"] for s in log["steps"] if s["step"] == "impute"}
     assert rules == {"age": "median = 35", "colour": "mode = red"}
@@ -168,12 +169,12 @@ def test_personal_data_is_never_imputed():
 
 
 def test_impute_strategy_configurable_per_column():
-    df = pd.DataFrame({"age": ["20", "30", None, "40", "100"],
-                       "score": ["1.0", "2.0", None, "3.0", "10.0"]}, dtype=str)
+    df = pd.DataFrame({"age": ["20", "30", None, "40", "60"],
+                       "score": ["1.0", "2.0", None, "3.0", "6.0"]}, dtype=str)
     cleaned, _ = clean_dataset(df, profile_dataset(df, "t.csv"),
                                {"impute": {"age": "none", "score": "mean"}})
     assert pd.isna(cleaned["age"].iloc[2])                             # left empty
-    assert cleaned["score"].iloc[2] == pytest.approx(4.0)              # mean of 1, 2, 3, 10
+    assert cleaned["score"].iloc[2] == pytest.approx(3.0)              # mean of 1, 2, 3, 6
 
 
 def test_unknown_strategy_is_rejected():
