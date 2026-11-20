@@ -148,14 +148,16 @@ def _regression(df: pd.DataFrame, target: str, features: list[str]) -> pd.Series
     X = np.where(np.isnan(X), np.nanmean(X, axis=0), X)
     X = np.nan_to_num(X)                                    # a feature that is empty everywhere
     known = s.notna().to_numpy()
-    if is_numeric(s):
-        model = LinearRegression().fit(X[known], s[known].astype(float))
-    else:
-        if s[known].nunique() < 2:                          # one class only: nothing to learn
-            return _simple(s, "mode")
-        model = LogisticRegression(max_iter=1000).fit(X[known], s[known].astype(str))
+    if not is_numeric(s) and s[known].nunique() < 2:        # one class only: nothing to learn
+        return _simple(s, "mode")
     values = np.empty(len(s), dtype=object if not is_numeric(s) else float)
-    values[~known] = model.predict(X[~known])
+    # same false macOS Accelerate "matmul" flags as in KNN (checked: results are finite)
+    with np.errstate(divide="ignore", over="ignore", invalid="ignore"):
+        if is_numeric(s):
+            model = LinearRegression().fit(X[known], s[known].astype(float))
+        else:
+            model = LogisticRegression(max_iter=1000).fit(X[known], s[known].astype(str))
+        values[~known] = model.predict(X[~known])
     return _finish(s, values)
 
 
@@ -190,6 +192,7 @@ def impute_columns(df: pd.DataFrame, targets: list[str], features: list[str],
     if method == "knn":
         # numpy 2 with macOS Accelerate raises false "divide by zero in matmul" flags
         # inside the distance calculation; the distances themselves are correct
+        # (checked: same result as einsum, all values finite)
         with np.errstate(divide="ignore", over="ignore", invalid="ignore"):
             X = KNNImputer(n_neighbors=KNN_NEIGHBOURS).fit_transform(enc.X)
     else:
