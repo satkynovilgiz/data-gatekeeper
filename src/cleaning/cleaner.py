@@ -36,19 +36,26 @@ import numpy as np
 import pandas as pd
 
 from src.profiling.profiler import PLACEHOLDERS, profile_dataset, read_csv_raw, save_report
+from src.profiling.semantic import PII_TYPES
 from src.quality.score import quality_delta, quality_score
 
+from .imputers import METHODS, describe, impute_columns, is_numeric
 from .schema import canonical_forms, category_key, infer_schema, save_schema
 
 LOG_VERSION = "1.0"
 
 DEFAULT_CONFIG: dict[str, Any] = {
-    # imputation per column: "median" | "mean" | "mode" | "none". Columns not listed
-    # use the defaults below by schema type (dates, text and ids are never filled in:
-    # an invented email or hire date would be fake data).
+    # imputation per column: "median" | "mean" | "mode" | "knn" | "regression" |
+    # "iterative" | "none". Columns not listed use the defaults below by schema type
+    # ("median" on a category means its mode). Dates, text, ids and personal data are
+    # never filled in: an invented email or hire date would be fake data.
     "impute": {},
     "numeric_strategy": "median",
     "categorical_strategy": "mode",
+    # Columns the ML imputers must NOT look at. "y" is the Bank Marketing label (did the
+    # client subscribe?): using it to fill other columns would leak the answer into the
+    # inputs of a later model (target leakage).
+    "exclude_features": ["y"],
     # Codes that carry a MEANING, so they are not missing values to fill in.
     # UCI Bank Marketing: pdays = days since the client was last contacted, and
     # 999 = "never contacted before". Imputing a number there would invent contacts.
@@ -72,7 +79,9 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "max_examples": 3,
 }
 
-IMPUTE_STRATEGIES = {"median", "mean", "mode", "none"}
+IMPUTE_STRATEGIES = {*METHODS, "none"}
+# a feature column may be at most this share empty (pdays is 96% empty: no use as a feature)
+MAX_FEATURE_MISSING = 0.5
 
 # Which step carries out each Module 1 action. Actions not listed here are skipped
 # with the reason in SKIPPED_ACTIONS, so the log accounts for every suggestion.
@@ -336,36 +345,66 @@ def drop_duplicates(run: CleaningRun) -> None:
 
 
 def _strategy(run: CleaningRun, column: str) -> str:
-    """The imputation strategy for a column: from config, else by schema type."""
-    if column in run.no_impute:
+    """The imputation strategy for a column: from config, else by schema type.
+
+    Never for: pdays-like and flag columns (no_impute), dates, text, ids, personal data.
+    """
+    col = run.schema["columns"].get(column, {})
+    if column in run.no_impute or col.get("semantic_type") in PII_TYPES:
         return "none"
     if column in run.config["impute"]:
         return run.config["impute"][column]
-    etype = run.schema["columns"].get(column, {}).get("expected_type")
-    if etype == "numeric":
+    if col.get("expected_type") == "numeric":
         return run.config["numeric_strategy"]
-    if etype == "categorical":
+    if col.get("expected_type") == "categorical":
         return run.config["categorical_strategy"]
     return "none"
 
 
-def impute(run: CleaningRun) -> None:
-    """Step 10: fill the remaining NaN: median / mean for numbers, mode for categories."""
-    for c in run.df.columns:
-        s = run.df[c]
-        gaps = s.isna()
-        strategy = _strategy(run, c)
-        if not gaps.any() or strategy == "none" or s.notna().sum() == 0:
+def feature_columns(run: CleaningRun) -> list[str]:
+    """Columns the ML imputers may learn from: numbers and categories only.
+
+    Not: ids, text, dates, personal data, excluded columns (the label "y"), or columns
+    that are mostly empty.
+    """
+    out = []
+    for c in run.cols("numeric") + run.cols("categorical"):
+        col = run.schema["columns"][c]
+        if (col["semantic_type"] in PII_TYPES or c in run.config["exclude_features"]
+                or run.df[c].isna().mean() > MAX_FEATURE_MISSING):
             continue
-        if strategy == "mode":
-            value = s.mode().sort_values().iloc[0]      # ties: the first alphabetically
-        else:
-            value = float(s.median() if strategy == "median" else s.mean())
-            if run.schema["columns"].get(c, {}).get("is_integer"):
-                value = round(value)                    # keep whole-number columns whole
-        new = s.fillna(value)
-        run.record("impute", c, f"{strategy} = {_jsonable(value)}", gaps, s, new)
-        run.df[c] = new
+        out.append(c)
+    return out
+
+
+def impute(run: CleaningRun) -> None:
+    """Step 10: fill the remaining NaN with each column's method (median/mode or ML).
+
+    Columns that share an ML method are filled together in one call, so KNN and
+    iterative see all of them at once.
+    """
+    by_method: dict[str, list[str]] = {}
+    for c in run.df.columns:
+        strategy = _strategy(run, c)
+        if strategy != "none" and run.df[c].isna().any() and run.df[c].notna().any():
+            by_method.setdefault(strategy, []).append(c)
+    features = feature_columns(run)
+    for method, targets in by_method.items():
+        filled = impute_columns(run.df, targets, features, method)
+        for c in targets:
+            s, new = run.df[c], filled[c]
+            gaps = s.isna()
+            if method in ("median", "mean", "mode"):
+                # one value for every gap: show it, e.g. "median = 42" or "mode = Rome"
+                label = method if is_numeric(s) or method == "mode" else "mode"
+                value = _jsonable(new[gaps].iloc[0])
+                if isinstance(value, float) and value.is_integer():
+                    value = int(value)                  # "median = 35", not "35.0"
+                rule = f"{label} = {value}"
+            else:
+                rule = f"{describe(method)} using {len(features)} feature columns"
+            run.record("impute", c, rule, gaps, s, new)
+            run.df[c] = new
 
 
 STEPS = [trim_whitespace, special_codes, disguised_missing_to_nan, normalise_categories,
@@ -444,6 +483,8 @@ def clean_dataset(df: pd.DataFrame, report: dict,
     """
     cfg = {**DEFAULT_CONFIG, **(config or {})}
     bad = {c: v for c, v in cfg["impute"].items() if v not in IMPUTE_STRATEGIES}
+    bad.update({k: cfg[k] for k in ("numeric_strategy", "categorical_strategy")
+                if cfg[k] not in IMPUTE_STRATEGIES})
     if bad:
         raise ValueError(f"unknown imputation strategy {bad}; use one of "
                          f"{sorted(IMPUTE_STRATEGIES)}")

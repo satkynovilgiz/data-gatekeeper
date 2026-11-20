@@ -143,12 +143,22 @@ def test_drop_duplicates_keeps_first_copy():
 
 def test_impute_median_for_numbers_and_mode_for_categories():
     df = pd.DataFrame({"age": ["20", "30", None, "40", "100"],
-                       "city": ["Rome", "Rome", "Paris", None, "Rome"]}, dtype=str)
+                       "colour": ["red", "red", "blue", None, "red"]}, dtype=str)
     cleaned, log = clean_dataset(df, profile_dataset(df, "t.csv"))
     assert cleaned["age"].tolist() == [20, 30, 35, 40, 100]           # median of 20,30,40,100
-    assert cleaned["city"].tolist()[3] == "Rome"                       # mode
+    assert cleaned["colour"].tolist()[3] == "red"                      # mode
     rules = {s["column"]: s["rule"] for s in log["steps"] if s["step"] == "impute"}
-    assert rules == {"age": "median = 35", "city": "mode = Rome"}
+    assert rules == {"age": "median = 35", "colour": "mode = red"}
+
+
+def test_personal_data_is_never_imputed():
+    # Module 1 calls "city" an address (personal data): never filled in, with any method
+    df = pd.DataFrame({"age": [str(20 + i) for i in range(10)],
+                       "city": ["Rome", "Paris"] * 4 + [None, None]}, dtype=str)
+    for method in ("mode", "knn"):
+        cleaned, _ = clean_dataset(df, profile_dataset(df, "t.csv"),
+                                   {"categorical_strategy": method})
+        assert cleaned["city"].isna().sum() == 2
 
 
 def test_impute_strategy_configurable_per_column():
@@ -220,3 +230,53 @@ def test_keeping_unknown_does_not_create_duplicates():
     cleaned_sprint4, _ = clean_dataset(df, profile_dataset(df, "bank.csv"),
                                        {"keep_as_category": []})
     assert cleaned_sprint4.duplicated().sum() == 1             # the bug, for comparison
+
+
+# ------------------------------------------------------------ Sprint 5: ML imputers
+def employees(n: int = 60) -> pd.DataFrame:
+    """years_experience = age - 22, so ML can predict a missing age; one ID column."""
+    df = pd.DataFrame({"employee_id": [f"E{i}" for i in range(n)],
+                       "age": [str(25 + i % 35) for i in range(n)],
+                       "years_experience": [str(3 + i % 35) for i in range(n)],
+                       "dept": ["Sales", "HR", "IT"] * (n // 3)}, dtype=str)
+    # gaps in the MIDDLE of the range: at the edge (the youngest), all 5 nearest
+    # neighbours are older, so KNN can only guess too high
+    df.loc[[15, 16, 17], "age"] = None
+    df.loc[[3, 4], "dept"] = None
+    return df
+
+
+@pytest.mark.parametrize("method", ["knn", "regression", "iterative"])
+def test_ml_imputer_in_pipeline(method):
+    df = employees()
+    cleaned, log = clean_dataset(df, profile_dataset(df, "hr.csv"),
+                                 {"numeric_strategy": method, "categorical_strategy": method})
+    # age is predicted from years_experience (age = years + 22), not the median 42
+    expected = df.loc[[15, 16, 17], "years_experience"].astype(int) + 22
+    assert (cleaned.loc[[15, 16, 17], "age"] - expected).abs().max() <= 3
+    assert cleaned["dept"].notna().all()
+    rules = {s["column"]: s["rule"] for s in log["steps"] if s["step"] == "impute"}
+    assert rules["age"].startswith(method)
+
+
+def test_per_column_imputer_overrides_global():
+    df = employees()
+    _, log = clean_dataset(df, profile_dataset(df, "hr.csv"),
+                           {"numeric_strategy": "knn", "impute": {"dept": "mode"}})
+    rules = {s["column"]: s["rule"] for s in log["steps"] if s["step"] == "impute"}
+    assert rules["age"].startswith("knn") and rules["dept"].startswith("mode")
+
+
+def test_features_skip_ids_label_and_mostly_empty_columns():
+    df = employees()
+    df["y"] = ["yes", "no"] * 30
+    df["mostly_empty"] = [None] * 50 + [str(i) for i in range(10)]
+    run = make_run(df.to_dict("list"))
+    cleaner.convert_to_number(run)
+    assert set(cleaner.feature_columns(run)) == {"age", "years_experience", "dept"}
+
+
+def test_unknown_global_strategy_is_rejected():
+    df = employees()
+    with pytest.raises(ValueError, match="unknown imputation strategy"):
+        clean_dataset(df, profile_dataset(df, "hr.csv"), {"numeric_strategy": "magic"})
