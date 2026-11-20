@@ -17,13 +17,14 @@ The steps always run in this order (each one makes the next one easier):
      7. invalid_format_to_nan     "not-an-email" -> NaN
      8. impossible_value_to_nan   age 230 -> NaN (outside the business rule 0-120)
      9. drop_duplicates           exact duplicate rows (keep the first)
-    10. handle_outliers           IQR outliers: flag / cap / NaN; Isolation Forest: is_anomaly
-    11. impute                    NaN -> median / mode, or an ML imputer (knn, regression,
+    10. fuzzy_duplicates          "Jon Smith" ~ "John Smith" + same fields: flag (or merge)
+    11. handle_outliers           IQR outliers: flag / cap / NaN; Isolation Forest: is_anomaly
+    12. impute                    NaN -> median / mode, or an ML imputer (knn, regression,
                                   iterative), per column
 
 Missing codes and bad values become NaN first (steps 2-8), duplicates go next (so
 they do not bias the median), outliers are handled, and only then are the gaps
-filled (step 11).
+filled (step 12).
 Rows are never deleted except exact duplicates, and the input file is only read.
 """
 from __future__ import annotations
@@ -43,6 +44,7 @@ from src.profiling.semantic import PII_TYPES
 from src.quality.score import quality_delta, quality_score
 
 from .evaluation import evaluate_imputers, save_evaluation
+from .fuzzy import FUZZY_THRESHOLD, MIN_AGREEMENT, find_fuzzy_duplicates
 from .imputers import METHODS, describe, impute_columns, is_numeric
 from .outliers import ANOMALY_SHARE, iqr_outliers, isolation_forest_rows, main_reason
 from .schema import canonical_forms, category_key, infer_schema, save_schema
@@ -88,6 +90,14 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "outliers": {},
     # Isolation Forest marks this share of the most unusual rows in is_anomaly (0 = off)
     "anomaly_share": ANOMALY_SHARE,
+    # Fuzzy duplicates: rows whose names are similar (rapidfuzz score >= threshold, 0-100)
+    # AND whose other fields mostly agree. Default: flag both rows (possible_duplicate = 1).
+    # Pairs with a name score >= fuzzy_merge_threshold are merged (later row removed);
+    # None = never merge. Name columns are found automatically (Module 1 person_name).
+    "fuzzy_threshold": FUZZY_THRESHOLD,
+    "fuzzy_min_agreement": MIN_AGREEMENT,
+    "fuzzy_merge_threshold": None,
+    "fuzzy_key_columns": None,
     # hide 10% of known values and score every imputer on them (slower: off by default)
     "evaluate_imputers": False,
     "max_examples": 3,
@@ -144,6 +154,7 @@ class CleaningRun:
     added_columns: list[str] = field(default_factory=list)
     kept_as_category: dict[str, int] = field(default_factory=dict)  # column -> "unknown" cells
     outlier_stats: dict[str, int] = field(default_factory=dict)
+    fuzzy: dict[str, Any] = field(default_factory=dict)
 
     def cols(self, etype: str) -> list[str]:
         """Names of the columns whose schema expected_type is etype."""
@@ -393,7 +404,7 @@ def feature_columns(run: CleaningRun) -> list[str]:
 
 
 def impute(run: CleaningRun) -> None:
-    """Step 11: fill the remaining NaN with each column's method (median/mode or ML).
+    """Step 12: fill the remaining NaN with each column's method (median/mode or ML).
 
     Columns that share an ML method are filled together in one call, so KNN and
     iterative see all of them at once.
@@ -422,6 +433,58 @@ def impute(run: CleaningRun) -> None:
             run.df[c] = new
 
 
+def fuzzy_duplicates(run: CleaningRun) -> None:
+    """Step 10: near-duplicate rows (similar name + mostly equal fields): flag or merge.
+
+    Runs before imputation: filled-in values would make different people look alike.
+    """
+    cfg = run.config
+    keys = cfg["fuzzy_key_columns"] or [
+        c for c, s in run.schema["columns"].items()
+        if s["semantic_type"] == "person_name" and c in run.df.columns]
+    if not keys:
+        run.fuzzy = {"skipped": "no name column to compare (set fuzzy_key_columns)"}
+        return
+    compare = [c for c in run.df.columns if c not in keys and c not in run.added_columns
+               and run.schema["columns"].get(c, {}).get("expected_type") != "id"]
+    pairs = find_fuzzy_duplicates(run.df, keys, compare, cfg["fuzzy_threshold"],
+                                  cfg["fuzzy_min_agreement"])
+    merge_at = cfg["fuzzy_merge_threshold"]
+    to_merge = [p for p in pairs if merge_at is not None and p["name_similarity"] >= merge_at]
+    to_flag = [p for p in pairs if p not in to_merge]
+    n_ex = cfg["max_examples"]
+
+    def example(p: dict) -> dict:
+        return {"row": p["row_b"], "similar_to_row": p["row_a"],
+                "names": f"{p['name_a']} ~ {p['name_b']}", "name_similarity":
+                p["name_similarity"], "fields_equal": f"{p['fields_equal']}/{p['fields_compared']}"}
+
+    removed = sorted({p["row_b"] for p in to_merge} - {p["row_a"] for p in to_merge})
+    if removed:
+        run.steps.append({"step": "fuzzy_merge", "column": "<dataset>",
+                          "rule": f"name similarity >= {merge_at} and >= "
+                                  f"{cfg['fuzzy_min_agreement']:.0%} of fields equal: "
+                                  f"later row removed",
+                          "cells_changed": 0, "rows_changed": len(removed),
+                          "examples": [example(p) for p in to_merge[:n_ex]]})
+        run.df = run.df.drop(index=removed)
+    flag_rows = sorted({r for p in to_flag for r in (p["row_a"], p["row_b"])
+                        if r in run.df.index})
+    if flag_rows:
+        run.df["possible_duplicate"] = run.df.index.isin(flag_rows).astype(int)
+        run.added_columns.append("possible_duplicate")
+        run.no_impute.add("possible_duplicate")
+        run.steps.append({"step": "fuzzy_flag", "column": "possible_duplicate",
+                          "rule": f"name similarity >= {cfg['fuzzy_threshold']} and >= "
+                                  f"{cfg['fuzzy_min_agreement']:.0%} of fields equal: "
+                                  f"both rows flagged, nothing removed",
+                          "cells_changed": len(flag_rows), "rows_changed": len(flag_rows),
+                          "examples": [example(p) for p in to_flag[:n_ex]]})
+    run.fuzzy = {"key_columns": keys, "compared_columns": compare,
+                 "pairs_found": len(pairs), "rows_flagged": len(flag_rows),
+                 "rows_merged": len(removed), "pairs": pairs[:100]}
+
+
 def outlier_columns(run: CleaningRun) -> list[str]:
     """Numeric columns checked for outliers: not added flags, not special-code columns (pdays)."""
     return [c for c in run.cols("numeric")
@@ -429,7 +492,7 @@ def outlier_columns(run: CleaningRun) -> list[str]:
 
 
 def handle_outliers(run: CleaningRun) -> None:
-    """Step 10: IQR outliers per column (flag / cap / nan) + Isolation Forest per row (flag).
+    """Step 11: IQR outliers per column (flag / cap / nan) + Isolation Forest per row (flag).
 
     Both detectors look at the data BEFORE any outlier is changed, so they are independent.
     "nan" leaves a gap that the impute step fills; no row is ever deleted.
@@ -487,7 +550,7 @@ def handle_outliers(run: CleaningRun) -> None:
 
 STEPS = [trim_whitespace, special_codes, disguised_missing_to_nan, normalise_categories,
          convert_to_number, parse_dates, invalid_format_to_nan, impossible_value_to_nan,
-         drop_duplicates, handle_outliers, impute]
+         drop_duplicates, fuzzy_duplicates, handle_outliers, impute]
 
 
 # -------------------------------------------------------------- pipeline
@@ -548,6 +611,8 @@ def _summary(run: CleaningRun, rows_before: int, cols_before: int) -> dict:
         "not_a_date_to_nan": total("parse_dates", rule_start="not a date"),
         "invalid_format_to_nan": total("invalid_format_to_nan"),
         "impossible_values_fixed": total("impossible_value_to_nan"),
+        "fuzzy_duplicates": {k: v for k, v in run.fuzzy.items()
+                             if k not in ("pairs", "key_columns", "compared_columns")},
         "outliers": {**run.outlier_stats,
                      "flagged": total("outlier_flag"), "capped": total("outlier_cap"),
                      "set_to_nan": total("outlier_to_nan")},
@@ -604,6 +669,8 @@ def clean_dataset(df: pd.DataFrame, report: dict,
     }
     # cleaning time only; the (optional) evaluation is timed on its own
     log["summary"]["seconds"] = round(time.perf_counter() - start - eval_seconds, 2)
+    if run.fuzzy.get("pairs"):
+        log["fuzzy_duplicates"] = run.fuzzy             # the pairs with their scores
     if evaluation is not None:
         log["imputer_evaluation"] = evaluation
     return run.df, log
