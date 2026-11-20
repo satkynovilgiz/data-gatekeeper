@@ -17,10 +17,13 @@ The steps always run in this order (each one makes the next one easier):
      7. invalid_format_to_nan     "not-an-email" -> NaN
      8. impossible_value_to_nan   age 230 -> NaN (outside the business rule 0-120)
      9. drop_duplicates           exact duplicate rows (keep the first)
-    10. impute                    NaN -> median (numbers) / mode (categories)
+    10. handle_outliers           IQR outliers: flag / cap / NaN; Isolation Forest: is_anomaly
+    11. impute                    NaN -> median / mode, or an ML imputer (knn, regression,
+                                  iterative), per column
 
 Missing codes and bad values become NaN first (steps 2-8), duplicates go next (so
-they do not bias the median), and only then are the gaps filled (step 10).
+they do not bias the median), outliers are handled, and only then are the gaps
+filled (step 11).
 Rows are never deleted except exact duplicates, and the input file is only read.
 """
 from __future__ import annotations
@@ -41,6 +44,7 @@ from src.quality.score import quality_delta, quality_score
 
 from .evaluation import evaluate_imputers, save_evaluation
 from .imputers import METHODS, describe, impute_columns, is_numeric
+from .outliers import ANOMALY_SHARE, iqr_outliers, isolation_forest_rows, main_reason
 from .schema import canonical_forms, category_key, infer_schema, save_schema
 
 LOG_VERSION = "1.0"
@@ -77,6 +81,13 @@ DEFAULT_CONFIG: dict[str, Any] = {
     # ambiguous dates like 05/06/2020: True = 5 June (day first), False = May 6
     # (only used when no value in the column shows the order, e.g. 20/09/2023)
     "dayfirst": True,
+    # Outliers (IQR, per column): "flag" (default: new <column>_outlier 0/1 column, value
+    # kept), "cap" (clip to the IQR fences), "nan" (set to NaN, then imputed) or "none".
+    # Per column in "outliers", e.g. {"salary": "cap"}. Rows are never deleted.
+    "outlier_action": "flag",
+    "outliers": {},
+    # Isolation Forest marks this share of the most unusual rows in is_anomaly (0 = off)
+    "anomaly_share": ANOMALY_SHARE,
     # hide 10% of known values and score every imputer on them (slower: off by default)
     "evaluate_imputers": False,
     "max_examples": 3,
@@ -99,10 +110,10 @@ ACTION_STEPS = {
     "standardise_case": ["normalise_categories"],
     "parse_dates_iso": ["parse_dates"],
     "set_invalid_to_nan": ["invalid_format_to_nan"],
+    "cap_outliers": ["outlier_flag", "outlier_cap", "outlier_to_nan"],
 }
+OUTLIER_ACTIONS = {"flag", "cap", "nan", "none"}
 SKIPPED_ACTIONS = {
-    "cap_outliers": "planned for Sprint 5 (outlier handling); impossible values are "
-                    "already set to NaN by impossible_value_to_nan",
     "mask_pii": "planned for Sprint 6 (PII protection)",
     "drop_column": "not automatic: dropping a column needs a person's decision",
     "review_values": "needs a person to look at the values",
@@ -132,6 +143,7 @@ class CleaningRun:
     no_impute: set[str] = field(default_factory=set)      # pdays, flag columns, ...
     added_columns: list[str] = field(default_factory=list)
     kept_as_category: dict[str, int] = field(default_factory=dict)  # column -> "unknown" cells
+    outlier_stats: dict[str, int] = field(default_factory=dict)
 
     def cols(self, etype: str) -> list[str]:
         """Names of the columns whose schema expected_type is etype."""
@@ -381,7 +393,7 @@ def feature_columns(run: CleaningRun) -> list[str]:
 
 
 def impute(run: CleaningRun) -> None:
-    """Step 10: fill the remaining NaN with each column's method (median/mode or ML).
+    """Step 11: fill the remaining NaN with each column's method (median/mode or ML).
 
     Columns that share an ML method are filled together in one call, so KNN and
     iterative see all of them at once.
@@ -410,9 +422,72 @@ def impute(run: CleaningRun) -> None:
             run.df[c] = new
 
 
+def outlier_columns(run: CleaningRun) -> list[str]:
+    """Numeric columns checked for outliers: not added flags, not special-code columns (pdays)."""
+    return [c for c in run.cols("numeric")
+            if c not in run.added_columns and c not in run.no_impute]
+
+
+def handle_outliers(run: CleaningRun) -> None:
+    """Step 10: IQR outliers per column (flag / cap / nan) + Isolation Forest per row (flag).
+
+    Both detectors look at the data BEFORE any outlier is changed, so they are independent.
+    "nan" leaves a gap that the impute step fills; no row is ever deleted.
+    """
+    columns = outlier_columns(run)
+    masks = {c: iqr_outliers(run.df[c]) for c in columns}
+    anomalies = isolation_forest_rows(run.df, columns, run.config["anomaly_share"])
+    any_iqr = pd.Series(False, index=run.df.index)
+
+    for c, (is_out, fences) in masks.items():
+        action = run.config["outliers"].get(c, run.config["outlier_action"])
+        if fences is None or not is_out.any() or action == "none":
+            continue
+        any_iqr |= is_out
+        lo, hi = fences
+        s = run.df[c]
+        where = f"outside IQR fences [{lo:g}, {hi:g}]"
+        if action == "flag":
+            name = f"{c}_outlier"
+            flag = is_out.astype(int)
+            run.df.insert(run.df.columns.get_loc(c) + 1, name, flag)
+            run.added_columns.append(name)
+            run.no_impute.add(name)
+            run.record("outlier_flag", c, f"{where}: value kept, {name} = 1", is_out, s, flag)
+        elif action == "cap":
+            if run.schema["columns"][c].get("is_integer"):
+                lo, hi = np.ceil(lo), np.floor(hi)          # whole-number columns stay whole
+            new = s.clip(lo, hi)
+            run.record("outlier_cap", c, f"{where}: capped to [{lo:g}, {hi:g}]", is_out, s, new)
+            run.df[c] = new
+        else:
+            new = s.mask(is_out)
+            run.record("outlier_to_nan", c, f"{where}: set to NaN, imputed later",
+                       is_out, s, new)
+            run.df[c] = new
+
+    if anomalies.any():
+        run.df["is_anomaly"] = anomalies.astype(int)
+        run.added_columns.append("is_anomaly")
+        run.no_impute.add("is_anomaly")
+        reasons = pd.Series("", index=run.df.index)
+        for r in anomalies[anomalies].index[: run.config["max_examples"]]:
+            reasons[r] = main_reason(run.df, columns, r)
+        run.record("isolation_forest", "is_anomaly",
+                   f"Isolation Forest: {run.config['anomaly_share']:.0%} most unusual rows "
+                   f"-> is_anomaly = 1 (values kept); before = the most unusual value",
+                   anomalies, reasons, run.df["is_anomaly"])
+    run.outlier_stats = {
+        "iqr_cells": int(sum(m.sum() for m, f in masks.values() if f is not None)),
+        "iqr_rows": int(any_iqr.sum()),
+        "isolation_forest_rows": int(anomalies.sum()),
+        "rows_found_by_both": int((any_iqr & anomalies).sum()),
+    }
+
+
 STEPS = [trim_whitespace, special_codes, disguised_missing_to_nan, normalise_categories,
          convert_to_number, parse_dates, invalid_format_to_nan, impossible_value_to_nan,
-         drop_duplicates, impute]
+         drop_duplicates, handle_outliers, impute]
 
 
 # -------------------------------------------------------------- pipeline
@@ -434,6 +509,9 @@ def _suggestion_status(run: CleaningRun) -> list[dict]:
         steps = [st for st in ACTION_STEPS.get(action, []) if (st, col) in done]
         if steps:
             out.append({"column": col, "action": action, "status": "done", "by_steps": steps})
+        elif action == "cap_outliers" and col in run.no_impute:
+            out.append({"column": col, "action": action, "status": "skipped",
+                        "reason": "values have a special meaning (special code column)"})
         elif col in run.kept_as_category:
             out.append({"column": col, "action": action, "status": "overridden",
                         "reason": "keep_as_category: 'unknown' is kept as its own category"})
@@ -470,6 +548,9 @@ def _summary(run: CleaningRun, rows_before: int, cols_before: int) -> dict:
         "not_a_date_to_nan": total("parse_dates", rule_start="not a date"),
         "invalid_format_to_nan": total("invalid_format_to_nan"),
         "impossible_values_fixed": total("impossible_value_to_nan"),
+        "outliers": {**run.outlier_stats,
+                     "flagged": total("outlier_flag"), "capped": total("outlier_cap"),
+                     "set_to_nan": total("outlier_to_nan")},
         "kept_as_category": dict(run.kept_as_category),
         "values_imputed": total("impute"),
         "cell_changes": sum(s["cells_changed"] for s in run.steps
@@ -488,6 +569,11 @@ def clean_dataset(df: pd.DataFrame, report: dict,
     bad = {c: v for c, v in cfg["impute"].items() if v not in IMPUTE_STRATEGIES}
     bad.update({k: cfg[k] for k in ("numeric_strategy", "categorical_strategy")
                 if cfg[k] not in IMPUTE_STRATEGIES})
+    bad_outliers = {c: a for c, a in {**cfg["outliers"], "*": cfg["outlier_action"]}.items()
+                    if a not in OUTLIER_ACTIONS}
+    if bad_outliers:
+        raise ValueError(f"unknown outlier action {bad_outliers}; use one of "
+                         f"{sorted(OUTLIER_ACTIONS)}")
     if bad:
         raise ValueError(f"unknown imputation strategy {bad}; use one of "
                          f"{sorted(IMPUTE_STRATEGIES)}")

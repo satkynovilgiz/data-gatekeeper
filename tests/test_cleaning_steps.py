@@ -56,7 +56,7 @@ def test_pdays_999_becomes_previously_contacted_not_imputed():
     # ... and it is NOT imputed (no median filled into the 999 rows)
     assert not any(s["step"] == "impute" and s["column"] in ("pdays", "previously_contacted")
                    for s in log["steps"])
-    assert log["summary"]["columns_added"] == ["previously_contacted"]
+    assert log["summary"]["columns_added"][0] == "previously_contacted"
     assert log["summary"]["special_codes_to_flag"] == 20
 
 
