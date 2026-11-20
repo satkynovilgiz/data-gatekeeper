@@ -16,7 +16,7 @@ raw.csv ──► Module 1: Profile ──► Module 2: Clean ──► Module 3
 | Module | Status | Output |
 |---|---|---|
 | 1. Profiling & Metadata Intelligence | ✅ **complete** (v1.2, Sprint 3): CLI + API + JSON Schema, disguised missing, quality score, cleaning suggestions | `profiling_report.json` + charts |
-| 2. Cleaning & Transformation | ⏳ next | `cleaned_data.csv`, `cleaning_log.json` |
+| 2. Cleaning & Transformation | 🔄 **in progress**: Sprint 4 ✅ core pipeline (schema inference, 10 cleaning steps, cleaning log, quality delta) · Sprint 5 ML imputation · Sprint 6 transformation + API | `cleaned_data.csv`, `cleaning_log.json`, `schema.json` |
 | 3. AI Validation & Anomaly Detection | ⏳ | `validation_report.json` |
 | 4. Integration, CLI & Docker | ⏳ | `python pipeline.py --input ... --output ...` |
 
@@ -30,6 +30,8 @@ pip install -r requirements.txt
 python scripts/download_bank_marketing.py    # real finance dataset (UCI Bank Marketing, 41k rows)
 python run_profiling.py --input data/raw/bank_marketing.csv --output results/bank   # ~3.5 s
 python run_profiling.py --input data/raw/bank_marketing.csv --output results/quick --sample 5000
+python run_cleaning.py --input data/raw/bank_marketing.csv \
+       --profile results/bank/profiling_report.json --output results/bank   # Module 2
 pytest -q                                     # run the tests
 ```
 
@@ -77,6 +79,23 @@ results/bank/
 
 Details: [`docs/module1_profiling.md`](docs/module1_profiling.md) · slides: [`docs/module1_presentation.md`](docs/module1_presentation.md)
 
+### Module 2 results (Sprint 4: core cleaning pipeline)
+```bash
+python run_cleaning.py --input data/raw/hr_employees_messy.csv --output results/hr   # profiles first
+```
+Writes `cleaned_data.csv`, `cleaning_log.json` (every change with before → after examples) and
+`schema.json` (expected type, range, format per column, for Module 3). The raw file is never changed.
+
+| | Bank Marketing | HR messy sample |
+|---|---|---|
+| Rows | 41,188 → 41,176 (12 duplicates) | 515 → 500 (15 duplicates) |
+| Fixed | 12,718 `unknown` → NaN → mode; `pdays 999` → new column `previously_contacted` (not imputed) | 19 category variants, 51 dates → ISO, 15 `"five"`, 15 bad emails, 10 `age = 230` |
+| Values imputed | 12,716 | 88 |
+| **Quality score** | **98.48 → 98.90 (+0.42)** | **88.86 → 99.83 (+10.97)** |
+| Run time (whole CLI) | 8.3 s (cleaning itself 1.5 s) | 0.8 s |
+
+Details, step order and the `pdays` decision: [`docs/module2_cleaning.md`](docs/module2_cleaning.md) · [`docs/sprint4_summary.md`](docs/sprint4_summary.md)
+
 ## Project structure
 
 ```
@@ -94,10 +113,13 @@ data-gatekeeper/
 │   │   └── visualize.py      #   backend charts (PNG)
 │   ├── quality/
 │   │   └── score.py          #   data quality score 0-100 (shared by Module 1 and 2)
-│   ├── cleaning/             # Module 2 (to build)
+│   ├── cleaning/             # Module 2
+│   │   ├── schema.py         #   infer_schema: expected type / range / format per column -> schema.json
+│   │   └── cleaner.py        #   10 cleaning steps + cleaning_log.json + quality before/after
 │   └── validation/           # Module 3 (to build)
 ├── tests/                    # pytest
 ├── run_profiling.py          # Module 1 CLI
+├── run_cleaning.py           # Module 2 CLI
 └── requirements.txt
 ```
 
