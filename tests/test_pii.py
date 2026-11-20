@@ -2,7 +2,7 @@
 import pandas as pd
 
 from src.profiling.profiler import profile_dataset
-from src.profiling.semantic import detect_semantic, is_id_name, luhn_ok
+from src.profiling.semantic import detect_semantic, infer_basic_type, is_id_name, luhn_ok
 
 
 def test_luhn_check():
@@ -52,3 +52,11 @@ def test_id_name_uses_whole_words():
     # "idx" and "paid" contain the letters "id" but are not ids
     assert not is_id_name("cons.price.idx")
     assert not is_id_name("paid")
+
+
+def test_five_digit_numbers_are_not_postcodes():
+    # Found in Sprint 4: cleaned salaries (82114, 104259) matched the US ZIP pattern
+    s = pd.Series([str(50000 + i * 731) for i in range(100)])
+    assert detect_semantic("salary", s, infer_basic_type(s))["semantic_type"] != "postcode"
+    # a column NAMED like a postcode is still a postcode
+    assert detect_semantic("zip", s, infer_basic_type(s))["semantic_type"] == "postcode"
