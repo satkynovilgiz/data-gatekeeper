@@ -23,10 +23,13 @@ from pathlib import Path
 import pandas as pd
 
 from src.profiling.profiler import PLACEHOLDERS
-from src.profiling.semantic import PATTERNS, name_words
+from src.profiling.semantic import PATTERNS, name_words, numeric_parse_rate
 
 SCHEMA_VERSION = "1.0"
 DATE_FORMAT = "YYYY-MM-DD"
+# share of real values that must be numbers for a numeric column (same as Module 1's
+# threshold for computing numeric_stats); the rest ("five") becomes NaN when cleaning
+NUMERIC_MIN_RATE = 0.8
 
 # Business rules: limits that real values can never break, matched on a WORD of the
 # column name ("age" matches "age" and "customer_age", not "page_views").
@@ -62,15 +65,20 @@ def business_rule(column: str) -> tuple[str, list[float | None]] | None:
     return None
 
 
-def expected_type(col: dict) -> str:
-    """Map a Module 1 column profile to one schema type: numeric|categorical|date|text|id."""
+def expected_type(col: dict, real: pd.Series) -> str:
+    """Map a Module 1 column profile to one schema type: numeric|categorical|date|text|id.
+
+    real = the column's values without empty cells and missing codes. A column is numeric
+    when >= 80% of its REAL values are numbers: "unknown" in an age column is a missing
+    value, not text, so it must not turn age into a category.
+    """
     sem = col["semantic"]["semantic_type"]
     basic = col["inferred_type"]
     if sem == "id":
         return "id"
     if basic == "datetime" or sem == "date":
         return "date"
-    if basic == "numeric":
+    if basic == "numeric" or numeric_parse_rate(real) >= NUMERIC_MIN_RATE:
         return "numeric"
     if sem in FREE_TEXT_SEMANTICS:
         # an email or a name is free text even in a small file where Module 1 calls it
@@ -120,8 +128,11 @@ def canonical_forms(series: pd.Series) -> dict[str, str]:
 
 def _column_schema(col: dict, series: pd.Series) -> dict:
     """Schema for one column from its profile (col) and its values (series)."""
-    etype = expected_type(col)
     missing_codes = list(col["disguised_missing"]["values"])
+    # real values only: no empty cells, no missing codes, no placeholder text
+    real = series.dropna()
+    real = real[~real.isin(missing_codes) & ~real.astype(str).map(category_key).isin(PLACEHOLDERS)]
+    etype = expected_type(col, real)
     out: dict = {
         "name": col["name"],
         "expected_type": etype,
@@ -129,10 +140,6 @@ def _column_schema(col: dict, series: pd.Series) -> dict:
         "nullable": col["true_missing_count"] > 0,
         "missing_codes": missing_codes,  # values meaning "missing", e.g. "unknown", "999"
     }
-    # real values only: no empty cells, no missing codes, no placeholder text
-    real = series.dropna()
-    real = real[~real.isin(missing_codes) & ~real.astype(str).map(category_key).isin(PLACEHOLDERS)]
-
     if etype == "numeric":
         nums = pd.to_numeric(real, errors="coerce").dropna()
         rule = business_rule(col["name"])

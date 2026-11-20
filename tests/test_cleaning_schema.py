@@ -49,6 +49,13 @@ def test_numeric_ranges_ignore_impossible_values_and_codes():
     assert age["is_integer"] is True
 
 
+def test_numeric_with_missing_codes_is_still_numeric():
+    # 8 of 9 values are numbers (89%, below Module 1's 95%), but "unknown" is a missing
+    # code, not text: without it, 100% are numbers -> numeric, so age 230 gets checked
+    df, rep = make({"age": ["34", "41", "230", "29", "unknown", "38", "45", "52", "60"]})
+    assert infer_schema(df, rep)["columns"]["age"]["expected_type"] == "numeric"
+
+
 def test_business_rule_matches_whole_words_only():
     assert business_rule("customer_age") == ("age", [0, 120])
     assert business_rule("page_views") is None              # "page" is not "age"
