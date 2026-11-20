@@ -3,6 +3,32 @@
 All notable changes to Data Gatekeeper. Format based on [Keep a Changelog](https://keepachangelog.com/);
 versions follow the `report_version` of `profiling_report.json`.
 
+## [1.3] — 2026-11-19 — Sprint 4: Module 2 core cleaning pipeline
+`profiling_report.json` stays at version 1.2. New files: `cleaning_log.json` 1.0 and `schema.json` 1.0.
+
+### Added
+- **Schema inference** (`src/cleaning/schema.py`) → `schema.json`: expected type (numeric,
+  categorical, date, text, id), `typical_range` (p1–p99), `valid_range` from business rules
+  (age 0–120, salary ≥ 0, …), allowed categories, date / email / phone formats, `unique` for IDs.
+- **Cleaning pipeline** (`src/cleaning/cleaner.py`), 10 steps in a fixed order: trim spaces, special
+  codes, disguised missing → NaN, normalise categories (case, spaces, `Fin.` → `Finance`), text →
+  number, dates → `YYYY-MM-DD`, invalid formats → NaN, impossible values → NaN, drop duplicates,
+  median / mode imputation (configurable per column).
+- **`pdays = 999` → new column `previously_contacted`** (yes/no); `pdays` is NaN only for the
+  never-contacted rows and is not imputed.
+- **`cleaning_log.json`**: every step with cells/rows changed and before → after examples, the status
+  of every Module 1 suggestion (done / skipped + reason), a summary and the quality score
+  before → after with the delta per dimension.
+- **CLI `run_cleaning.py`** (`--input`, `--profile`, `--output`, `--impute COL=STRATEGY`); runs
+  Module 1 profiling first when no `--profile` is given. The raw file is never modified.
+- Tests: 76 → 110 (`tests/test_cleaning_schema.py`, `test_cleaning_steps.py`, `test_cleaning_pipeline.py`).
+- Docs: `docs/module2_cleaning.md`, `docs/sprint4_summary.md`; Module 2 sprint plan (Sprints 4–6).
+
+### Fixed
+- Module 1: numeric columns of 5-digit numbers (e.g. cleaned salaries `82114`) were detected as US
+  postcodes (PII + invalid format). Value patterns for phone and postcode now skip numeric columns;
+  a column *named* `zip` / `postcode` is still found.
+
 ## [Unreleased] — repo polish before Sprint 4
 ### Added
 - MIT `LICENSE`.

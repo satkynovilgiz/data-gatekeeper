@@ -154,7 +154,10 @@ def detect_semantic(name: str, series: pd.Series, basic_type: str) -> dict:
                 "evidence": f"{card:.0%} of values are 13-19 digits and pass the Luhn check"}
     for sem, pat in PATTERNS.items():
         rate = match_rate(series, pat)
-        if rate >= 0.8 and (sem != "phone" or basic_type != "numeric"):
+        # A plain number column (salary 82114, amount 1234567) is not a phone number
+        # or a 5-digit US ZIP code just because of its digits; a real zip column is
+        # still found by its name (step 4).
+        if rate >= 0.8 and (sem not in ("phone", "postcode") or basic_type != "numeric"):
             return {"semantic_type": sem, "confidence": round(rate, 3),
                     "evidence": f"{rate:.0%} of values match the {sem} pattern"}
 

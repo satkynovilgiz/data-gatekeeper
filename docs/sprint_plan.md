@@ -47,29 +47,42 @@ Status: ✅ done · 🔄 in progress · ⏳ planned
 
 ## Module 2 — Clean
 
-### Sprint 4 ⏳ — Cleaning basics
-- Read `profiling_report.json` and decide actions per column
-- Fix types (text → number / date), trim spaces, normalise case
-- Remove exact duplicate rows
-- Write `cleaning_log.json` (every change: column, action, rows affected)
+Module 2 = **Advanced Data Cleaning & Transformation**.
+Sprint 4 builds the core pipeline, Sprint 5 adds ML imputation, Sprint 6 adds transformation,
+the cleaning API and the final tests + presentation.
 
-**Deliverable:** `cleaned_data.csv` + `cleaning_log.json` for the sample dataset.
+### Sprint 4 ✅ — Core cleaning pipeline
+- Schema inference engine (`src/cleaning/schema.py`) → `schema.json`: expected type
+  (numeric, categorical, date, text, id), expected range (p1–p99 + business rules like age 0–120),
+  expected format (YYYY-MM-DD, allowed categories). Module 3 will validate against it.
+- Cleaning pipeline (`src/cleaning/cleaner.py`) driven by `cleaning_suggestions`:
+  disguised missing → NaN, `pdays = 999` → `previously_contacted` (not imputed),
+  trim + normalise categories, parse dates to ISO, text → numbers, invalid formats → NaN,
+  impossible values → NaN, drop duplicates, median / mode imputation (configurable per column)
+- `cleaning_log.json`: every step with counts and before → after examples, summary,
+  quality score before → after + delta (reuses `src/quality/score.py`)
+- CLI `run_cleaning.py` (runs Module 1 first when no `--profile` is given)
+- Tests for every step, the raw file is never modified; results on both datasets
 
-### Sprint 5 ⏳ — Missing values + outliers
-- Imputation strategies: median (numeric), mode (categorical), "unknown" flag
-- Outlier handling: cap (winsorise) or flag, configurable
-- Standardise date formats to ISO `YYYY-MM-DD`
-- Tests for each cleaning step
+**Deliverable:** `cleaned_data.csv` + `cleaning_log.json` + `schema.json` for Bank Marketing and HR.
+**Result:** quality score Bank 98.48 → 98.90, HR 88.86 → 99.83; 110 tests. See `docs/sprint4_summary.md`.
 
-**Deliverable:** cleaning engine handles missing values and outliers with a log of every change.
+### Sprint 5 ⏳ — ML imputation + outliers
+- KNN imputation, regression imputation, iterative imputation (scikit-learn)
+- Compare them with median / mode on held-out cells (hide known values, measure the error)
+- Outlier handling: cap (winsorise) or flag, configurable (kept in Sprint 5:
+  outliers distort the imputers, so they belong together)
+- Optional "keep `unknown` as its own category" for informative missing values (e.g. `default`)
 
-### Sprint 6 ⏳ — PII protection + before/after report
+**Deliverable:** the pipeline can choose an imputer per column, with an accuracy comparison.
+
+### Sprint 6 ⏳ — Transformation + cleaning API + final
+- Scaling (standard, min-max, robust) and encoding (one-hot, ordinal) for ML-ready output
 - Mask or hash PII columns found by Module 1
-- Before/after comparison (profile the cleaned data again)
-- Cleaning options in a small config dict
-- Module 2 docs + presentation
+- Cleaning API: `POST /clean` (CSV → cleaned CSV + log)
+- Final tests, Module 2 docs + presentation
 
-**Deliverable:** Module 2 complete: raw → clean with a before/after quality score.
+**Deliverable:** Module 2 complete: raw → clean → ML-ready, by CLI and API.
 
 ---
 
