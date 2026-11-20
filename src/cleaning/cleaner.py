@@ -58,6 +58,12 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "pdays": {"code": 999, "flag_column": "previously_contacted",
                   "code_means": "no", "otherwise": "yes"},
     },
+    # Categorical columns where "unknown" carries information, so it is NOT a gap to fill.
+    # UCI Bank Marketing: default = "has credit in default?"; 20.9% answer "unknown".
+    # A client who does not say may be a risk signal, and imputing the mode would turn
+    # all of them into "no" (it even made 2 different clients identical in Sprint 4).
+    # In these columns every missing code (and empty cell) becomes the category "unknown".
+    "keep_as_category": ["default"],
     # override or add business rules, e.g. {"age": [18, 100]}
     "valid_ranges": {},
     # ambiguous dates like 05/06/2020: True = 5 June (day first), False = May 6
@@ -113,6 +119,7 @@ class CleaningRun:
     steps: list[dict] = field(default_factory=list)
     no_impute: set[str] = field(default_factory=set)      # pdays, flag columns, ...
     added_columns: list[str] = field(default_factory=list)
+    kept_as_category: dict[str, int] = field(default_factory=dict)  # column -> "unknown" cells
 
     def cols(self, etype: str) -> list[str]:
         """Names of the columns whose schema expected_type is etype."""
@@ -187,6 +194,7 @@ def disguised_missing_to_nan(run: CleaningRun) -> None:
     Uses the exact codes Module 1 found (schema missing_codes) plus the placeholder
     list for any column. Columns with >= 50% missing get a <column>_missing 0/1 flag
     instead of being filled in (Module 1 action replace_with_nan_and_add_flag).
+    Columns in config keep_as_category keep "unknown" as a real category instead.
     """
     flag_cols = run.suggested("replace_with_nan_and_add_flag")
     for c in list(run.df.columns):
@@ -195,6 +203,9 @@ def disguised_missing_to_nan(run: CleaningRun) -> None:
         s = run.df[c]
         codes = run.schema["columns"].get(c, {}).get("missing_codes", [])
         is_missing = s.notna() & (s.isin(codes) | s.map(category_key).isin(PLACEHOLDERS))
+        if c in run.cols("categorical") and c in run.config["keep_as_category"]:
+            _keep_unknown(run, c, is_missing | s.isna())
+            continue
         new = s.mask(is_missing)
         run.record("disguised_missing_to_nan", c,
                    f"missing codes {sorted(set(s[is_missing]))} -> NaN", is_missing, s, new)
@@ -207,6 +218,20 @@ def disguised_missing_to_nan(run: CleaningRun) -> None:
             run.no_impute.update({c, name})
             run.record("add_missing_flag", name, f"1 when {c} was missing, else 0 "
                        f"(too much missing to fill in)", flag == 1, s, flag)
+
+
+def _keep_unknown(run: CleaningRun, column: str, is_missing: pd.Series) -> None:
+    """Missing codes and empty cells in a keep_as_category column become one category "unknown".
+
+    The column is added to no_impute: "unknown" is an answer, not a gap.
+    """
+    s = run.df[column]
+    new = s.mask(is_missing, "unknown")
+    run.record("keep_as_category", column, "missing codes and empty cells -> category "
+               "'unknown' (kept, not imputed)", is_missing & (s != "unknown"), s, new)
+    run.df[column] = new
+    run.no_impute.add(column)
+    run.kept_as_category[column] = int(is_missing.sum())
 
 
 def normalise_categories(run: CleaningRun) -> None:
@@ -367,6 +392,9 @@ def _suggestion_status(run: CleaningRun) -> list[dict]:
         steps = [st for st in ACTION_STEPS.get(action, []) if (st, col) in done]
         if steps:
             out.append({"column": col, "action": action, "status": "done", "by_steps": steps})
+        elif col in run.kept_as_category:
+            out.append({"column": col, "action": action, "status": "overridden",
+                        "reason": "keep_as_category: 'unknown' is kept as its own category"})
         elif action in ACTION_STEPS:
             out.append({"column": col, "action": action, "status": "nothing_to_do",
                         "reason": "no matching values were left when the step ran"})
@@ -400,6 +428,7 @@ def _summary(run: CleaningRun, rows_before: int, cols_before: int) -> dict:
         "not_a_date_to_nan": total("parse_dates", rule_start="not a date"),
         "invalid_format_to_nan": total("invalid_format_to_nan"),
         "impossible_values_fixed": total("impossible_value_to_nan"),
+        "kept_as_category": dict(run.kept_as_category),
         "values_imputed": total("impute"),
         "cell_changes": sum(s["cells_changed"] for s in run.steps
                             if s["column"] not in run.added_columns),
@@ -439,6 +468,20 @@ def clean_dataset(df: pd.DataFrame, report: dict,
     return run.df, log
 
 
+def _schema_keep_unknown(schema: dict, columns: list[str]) -> None:
+    """In keep_as_category columns, "unknown" is an allowed value, not a missing code.
+
+    (Module 1 re-profiles the cleaned file and still calls "unknown" disguised missing.)
+    """
+    for c in columns:
+        col = schema["columns"].get(c)
+        if not col or col["expected_type"] != "categorical":
+            continue
+        col["missing_codes"] = [m for m in col["missing_codes"] if category_key(m) != "unknown"]
+        col["allowed_values"] = sorted(set(col["allowed_values"]) | {"unknown"})
+        col["unknown_is_category"] = True
+
+
 def clean_file(input_path: str | Path, out_dir: str | Path, report: dict | None = None,
                config: dict | None = None) -> dict:
     """Clean a CSV file end to end and write the three outputs to out_dir.
@@ -475,6 +518,7 @@ def clean_file(input_path: str | Path, out_dir: str | Path, report: dict | None 
 
     schema = infer_schema(cleaned_raw, after)
     schema["source"] = "inferred from cleaned_data.csv (the data after cleaning)"
+    _schema_keep_unknown(schema, log["config"]["keep_as_category"])
     save_schema(schema, out_dir)
 
     log["input"] = {"file": str(input_path), "rows": int(len(raw)), "columns": int(raw.shape[1])}

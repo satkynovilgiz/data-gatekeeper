@@ -181,3 +181,42 @@ def test_input_dataframe_is_not_changed():
     before = df.copy()
     clean_dataset(df, profile_dataset(df, "t.csv"))
     pd.testing.assert_frame_equal(df, before)
+
+
+# ---------------------------------------------------------- Sprint 5: keep "unknown"
+def bank_like(default: list[str]) -> pd.DataFrame:
+    """A small bank-like table: 20 different clients with a 'default' column."""
+    n = len(default)
+    return pd.DataFrame({"age": [str(30 + i) for i in range(n)],
+                         "job": ["admin.", "technician"] * (n // 2),
+                         "default": default}, dtype=str)
+
+
+def test_unknown_kept_as_category_in_default():
+    df = bank_like(["no"] * 14 + ["unknown"] * 5 + [None])
+    cleaned, log = clean_dataset(df, profile_dataset(df, "bank.csv"))
+    # "unknown" stays, the empty cell joins it, nothing is imputed to "no"
+    assert cleaned["default"].value_counts().to_dict() == {"no": 14, "unknown": 6}
+    assert not any(s["step"] == "impute" and s["column"] == "default" for s in log["steps"])
+    assert log["summary"]["kept_as_category"] == {"default": 6}
+    statuses = {s["status"] for s in log["suggestions"] if s["column"] == "default"}
+    assert statuses == {"overridden"}
+
+
+def test_keep_as_category_is_configurable():
+    df = bank_like(["no"] * 15 + ["unknown"] * 5)
+    cleaned, _ = clean_dataset(df, profile_dataset(df, "bank.csv"), {"keep_as_category": []})
+    assert (cleaned["default"] == "no").all()                  # old Sprint 4 behaviour: mode
+
+
+def test_keeping_unknown_does_not_create_duplicates():
+    # Sprint 4 bug: two clients identical except default = unknown / no became
+    # duplicates after imputing the mode "no". Keeping "unknown" keeps them apart.
+    df = pd.DataFrame({"age": ["33", "33"] + [str(40 + i) for i in range(8)],
+                       "default": ["unknown", "no"] + ["no"] * 6 + ["unknown"] * 2},
+                      dtype=str)
+    cleaned, log = clean_dataset(df, profile_dataset(df, "bank.csv"))
+    assert len(cleaned) == 10 and not cleaned.duplicated().any()
+    cleaned_sprint4, _ = clean_dataset(df, profile_dataset(df, "bank.csv"),
+                                       {"keep_as_category": []})
+    assert cleaned_sprint4.duplicated().sum() == 1             # the bug, for comparison

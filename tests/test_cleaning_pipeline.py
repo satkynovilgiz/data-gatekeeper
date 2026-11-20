@@ -129,7 +129,7 @@ def test_cleaning_log_format(messy, tmp_path):
         assert 1 <= len(entry["examples"]) <= 3
     # every Module 1 suggestion is accounted for
     statuses = {s["status"] for s in log["suggestions"]}
-    assert statuses <= {"done", "skipped", "nothing_to_do"}
+    assert statuses <= {"done", "skipped", "nothing_to_do", "overridden"}
     assert all("reason" in s for s in log["suggestions"] if s["status"] != "done")
     # quality before / after / delta for all four dimensions
     q = log["quality"]
@@ -141,3 +141,14 @@ def test_cleaning_log_format(messy, tmp_path):
         raise AssertionError(f"{token} in cleaning_log.json")
     on_disk = json.loads((tmp_path / "cleaning_log.json").read_text(), parse_constant=no_nan)
     assert on_disk["summary"] == log["summary"]
+
+
+def test_schema_allows_unknown_in_keep_as_category_column(tmp_path):
+    csv = tmp_path / "bank.csv"
+    rows = [f"{30 + i};{'unknown' if i % 4 == 0 else 'no'}" for i in range(20)]
+    csv.write_text("age;default\n" + "\n".join(rows) + "\n")
+    clean_file(csv, tmp_path / "out")
+    default = json.loads((tmp_path / "out" / "schema.json").read_text())["columns"]["default"]
+    assert default["allowed_values"] == ["no", "unknown"]
+    assert default["missing_codes"] == []
+    assert default["unknown_is_category"] is True
