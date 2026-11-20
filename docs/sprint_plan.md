@@ -51,7 +51,7 @@ Module 2 = **Advanced Data Cleaning & Transformation**.
 Sprint 4 builds the core pipeline, Sprint 5 adds ML imputation, Sprint 6 adds transformation,
 the cleaning API and the final tests + presentation.
 
-### Sprint 4 🔄 — Core cleaning pipeline
+### Sprint 4 ✅ — Core cleaning pipeline
 - Schema inference engine (`src/cleaning/schema.py`) → `schema.json`: expected type
   (numeric, categorical, date, text, id), expected range (p1–p99 + business rules like age 0–120),
   expected format (YYYY-MM-DD, allowed categories). Module 3 will validate against it.
@@ -65,11 +65,12 @@ the cleaning API and the final tests + presentation.
 - Tests for every step, the raw file is never modified; results on both datasets
 
 **Deliverable:** `cleaned_data.csv` + `cleaning_log.json` + `schema.json` for Bank Marketing and HR.
+**Result:** quality score Bank 98.48 → 98.90, HR 88.86 → 99.83; 110 tests. See `docs/sprint4_summary.md`.
 
 ### Sprint 5 ⏳ — ML imputation + outliers
 - KNN imputation, regression imputation, iterative imputation (scikit-learn)
 - Compare them with median / mode on held-out cells (hide known values, measure the error)
-- Outlier handling: cap (winsorise) or flag, configurable (moved here from Sprint 4:
+- Outlier handling: cap (winsorise) or flag, configurable (kept in Sprint 5:
   outliers distort the imputers, so they belong together)
 - Optional "keep `unknown` as its own category" for informative missing values (e.g. `default`)
 
