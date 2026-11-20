@@ -21,10 +21,12 @@ Only the target columns are changed; feature columns are just used to find simil
 """
 from __future__ import annotations
 
+import warnings
 from dataclasses import dataclass
 
 import numpy as np
 import pandas as pd
+from sklearn.exceptions import ConvergenceWarning
 from sklearn.experimental import enable_iterative_imputer  # noqa: F401  (needed before import)
 from sklearn.impute import IterativeImputer, KNNImputer
 from sklearn.linear_model import LinearRegression, LogisticRegression
@@ -57,10 +59,16 @@ class Encoded:
     slices: dict[str, slice]                  # column -> its matrix columns
     scale: dict[str, tuple[float, float]]     # numeric column -> (mean, std)
     categories: dict[str, list[str]]          # categorical column -> its categories
+    drop_first: bool = False                  # True: the first category has no column
 
 
-def encode(df: pd.DataFrame, columns: list[str]) -> Encoded:
-    """Numbers -> z-scores, categories -> one-hot (all NaN when missing). NaN stays NaN."""
+def encode(df: pd.DataFrame, columns: list[str], drop_first: bool = False) -> Encoded:
+    """Numbers -> z-scores, categories -> one-hot (all NaN when missing). NaN stays NaN.
+
+    drop_first=True leaves out the first category's column ("all zeros" = first category).
+    IterativeImputer needs this: with full one-hot, zone_low = 1 - zone_high exactly, so
+    when both are hidden each one is predicted from the other (a circular guess ~0.5).
+    """
     parts, slices, scale, categories = [], {}, {}, {}
     pos = 0
     for c in columns:
@@ -75,13 +83,15 @@ def encode(df: pd.DataFrame, columns: list[str]) -> Encoded:
             cats = sorted(s.dropna().astype(str).unique())
             onehot = (s.astype(str).to_numpy()[:, None] == np.array(cats)[None, :]).astype(float)
             onehot[s.isna().to_numpy()] = np.nan
+            if drop_first:
+                onehot = onehot[:, 1:]
             parts.append(onehot)
             categories[c] = cats
-            width = len(cats)
+            width = onehot.shape[1]
         slices[c] = slice(pos, pos + width)
         pos += width
     X = np.hstack(parts) if parts else np.empty((len(df), 0))
-    return Encoded(X, slices, scale, categories)
+    return Encoded(X, slices, scale, categories, drop_first)
 
 
 def decode(enc: Encoded, X: np.ndarray, column: str) -> np.ndarray:
@@ -90,6 +100,9 @@ def decode(enc: Encoded, X: np.ndarray, column: str) -> np.ndarray:
     if column in enc.scale:
         mean, std = enc.scale[column]
         return block[:, 0] * std + mean
+    if enc.drop_first:
+        # score of the left-out first category = 1 - the sum of the others
+        block = np.hstack([1 - block.sum(axis=1, keepdims=True), block])
     return np.array(enc.categories[column], dtype=object)[block.argmax(axis=1)]
 
 
@@ -173,11 +186,19 @@ def impute_columns(df: pd.DataFrame, targets: list[str], features: list[str],
     # knn and iterative fill the whole encoded matrix at once
     columns = list(dict.fromkeys([*targets, *features]))       # targets first, no repeats
     columns = [c for c in columns if df[c].notna().any()]      # sklearn drops empty columns
-    enc = encode(df, columns)
+    enc = encode(df, columns, drop_first=(method == "iterative"))
     if method == "knn":
-        X = KNNImputer(n_neighbors=KNN_NEIGHBOURS).fit_transform(enc.X)
+        # numpy 2 with macOS Accelerate raises false "divide by zero in matmul" flags
+        # inside the distance calculation; the distances themselves are correct
+        with np.errstate(divide="ignore", over="ignore", invalid="ignore"):
+            X = KNNImputer(n_neighbors=KNN_NEIGHBOURS).fit_transform(enc.X)
     else:
-        X = IterativeImputer(max_iter=ITERATIVE_ROUNDS, random_state=SEED).fit_transform(enc.X)
+        # "early stopping not reached" only means the guesses still moved a little after
+        # ITERATIVE_ROUNDS rounds; the evaluation measures how good the fills really are
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", ConvergenceWarning)
+            X = IterativeImputer(max_iter=ITERATIVE_ROUNDS,
+                                 random_state=SEED).fit_transform(enc.X)
     for t in targets:
         out[t] = _finish(df[t], decode(enc, X, t))
     return out

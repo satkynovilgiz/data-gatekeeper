@@ -77,3 +77,22 @@ def test_nothing_to_fill_returns_copy():
     df = pd.DataFrame({"a": [1.0, 2.0], "b": ["x", "y"]})
     out = impute_columns(df, ["a", "b"], [], "knn")
     pd.testing.assert_frame_equal(out, df)
+
+
+def test_iterative_predicts_categories_not_just_the_mode():
+    # Bug found by the evaluation: with full one-hot, zone_low = 1 - zone_high, and
+    # MICE predicted each from the other -> ~0.5 / 0.5 -> always the same category.
+    rng = np.random.default_rng(5)
+    x = rng.uniform(0, 100, 300)
+    df = pd.DataFrame({"x": x, "zone": np.where(x < 50, "low", "high")})
+    df.loc[:29, "zone"] = np.nan
+    out = impute_columns(df, ["zone"], ["x"], "iterative")
+    assert out.loc[:29, "zone"].nunique() == 2
+    assert (out.loc[:29, "zone"] == np.where(x[:30] < 50, "low", "high")).mean() >= 0.9
+
+
+def test_drop_first_encoding_decodes_the_left_out_category():
+    df = pd.DataFrame({"c": ["a", "b", "c", "a"]})
+    enc = encode(df, ["c"], drop_first=True)
+    assert enc.X.shape == (4, 2)                                # "a" has no column
+    assert list(decode(enc, enc.X, "c")) == ["a", "b", "c", "a"]
