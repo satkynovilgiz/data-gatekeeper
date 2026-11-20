@@ -198,8 +198,9 @@ def impute_columns(df: pd.DataFrame, targets: list[str], features: list[str],
     else:
         # "early stopping not reached" only means the guesses still moved a little after
         # ITERATIVE_ROUNDS rounds; the evaluation measures how good the fills really are
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore", ConvergenceWarning)
+        with warnings.catch_warnings(), np.errstate(divide="ignore", over="ignore",
+                                                    invalid="ignore"):
+            warnings.simplefilter("ignore", ConvergenceWarning)   # + the false matmul flags
             X = IterativeImputer(max_iter=ITERATIVE_ROUNDS,
                                  random_state=SEED).fit_transform(enc.X)
     for t in targets:
