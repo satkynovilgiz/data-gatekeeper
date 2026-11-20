@@ -39,6 +39,7 @@ from src.profiling.profiler import PLACEHOLDERS, profile_dataset, read_csv_raw, 
 from src.profiling.semantic import PII_TYPES
 from src.quality.score import quality_delta, quality_score
 
+from .evaluation import evaluate_imputers, save_evaluation
 from .imputers import METHODS, describe, impute_columns, is_numeric
 from .schema import canonical_forms, category_key, infer_schema, save_schema
 
@@ -76,6 +77,8 @@ DEFAULT_CONFIG: dict[str, Any] = {
     # ambiguous dates like 05/06/2020: True = 5 June (day first), False = May 6
     # (only used when no value in the column shows the order, e.g. 20/09/2023)
     "dayfirst": True,
+    # hide 10% of known values and score every imputer on them (slower: off by default)
+    "evaluate_imputers": False,
     "max_examples": 3,
 }
 
@@ -491,7 +494,15 @@ def clean_dataset(df: pd.DataFrame, report: dict,
     start = time.perf_counter()
     run = CleaningRun(df=df.copy(), schema=infer_schema(df, report), config=cfg,
                       suggestions=report.get("cleaning_suggestions", []))
+    evaluation, eval_seconds = None, 0.0
     for step in STEPS:
+        if step is impute and cfg["evaluate_imputers"]:
+            # score the imputers on this data: cleaned, but nothing filled in yet
+            t0 = time.perf_counter()
+            features = feature_columns(run)
+            evaluation = evaluate_imputers(
+                run.df, [c for c in features if c not in run.no_impute], features)
+            eval_seconds = time.perf_counter() - t0
         step(run)
     run.df = _whole_numbers_as_int(run.df)
 
@@ -505,7 +516,10 @@ def clean_dataset(df: pd.DataFrame, report: dict,
         "suggestions": _suggestion_status(run),
         "summary": _summary(run, len(df), df.shape[1]),
     }
-    log["summary"]["seconds"] = round(time.perf_counter() - start, 2)
+    # cleaning time only; the (optional) evaluation is timed on its own
+    log["summary"]["seconds"] = round(time.perf_counter() - start - eval_seconds, 2)
+    if evaluation is not None:
+        log["imputer_evaluation"] = evaluation
     return run.df, log
 
 
@@ -561,6 +575,16 @@ def clean_file(input_path: str | Path, out_dir: str | Path, report: dict | None 
     schema["source"] = "inferred from cleaned_data.csv (the data after cleaning)"
     _schema_keep_unknown(schema, log["config"]["keep_as_category"])
     save_schema(schema, out_dir)
+
+    if "imputer_evaluation" in log:
+        # the full evaluation gets its own file + chart; the log keeps the averages
+        full = log.pop("imputer_evaluation")
+        files = save_evaluation(full, out_dir, title=input_path.name)
+        log["imputer_evaluation"] = {
+            "best": full.get("best"), "files": files,
+            "methods": {m: {k: v for k, v in r.items() if k != "columns"}
+                        for m, r in full.get("methods", {}).items()},
+        }
 
     log["input"] = {"file": str(input_path), "rows": int(len(raw)), "columns": int(raw.shape[1])}
     log["outputs"] = {"cleaned_data": str(cleaned_path),
