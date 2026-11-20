@@ -52,6 +52,29 @@ df["years_experience"] = df["years_experience"].astype(object)
 df.loc[pick(0.03), "years_experience"] = "five"             # mixed types
 df = pd.concat([df, df.sample(15, random_state=1)])          # exact duplicates
 
+# Sprint 5: near-duplicates ("fuzzy" duplicates) — the same employee typed in again with a
+# new ID and a small change in the name; the email follows the typed name. Added at the end
+# with their own seed, so the rows above stay exactly the same.
+def retype(name):
+    """One realistic re-typing of 'First Last', picked at random."""
+    first, last = name.split(" ")
+    kind = rng2.integers(0, 4)
+    if kind == 0:
+        return f"{first[:-1]} {last}"                          # a letter missing: "Aibe Patel"
+    if kind == 1:
+        return f"{first} {last[:2]}{last[1]}{last[2:]}"        # a letter doubled: "Paatel"
+    if kind == 2:
+        return f"{last}, {first}"                              # surname first: "Patel, Aibek"
+    return f"{first[0]}{first[2]}{first[1]}{first[3:]} {last}" # two letters swapped: "Abiek"
+
+rng2 = np.random.default_rng(7)
+near = df.iloc[rng2.choice(500, 8, replace=False)].copy()
+near["full_name"] = [retype(n) for n in near["full_name"]]
+near["email"] = [n.lower().replace(", ", ".").replace(" ", ".") + "@company.com"
+                 for n in near["full_name"]]
+near["employee_id"] = [f"E{2000 + i}" for i in range(len(near))]
+df = pd.concat([df, near])
+
 out = Path(__file__).resolve().parents[1] / "data" / "raw" / "hr_employees_messy.csv"
 out.parent.mkdir(parents=True, exist_ok=True)
 df.to_csv(out, index=False)
