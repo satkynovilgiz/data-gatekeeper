@@ -17,10 +17,14 @@ The steps always run in this order (each one makes the next one easier):
      7. invalid_format_to_nan     "not-an-email" -> NaN
      8. impossible_value_to_nan   age 230 -> NaN (outside the business rule 0-120)
      9. drop_duplicates           exact duplicate rows (keep the first)
-    10. impute                    NaN -> median (numbers) / mode (categories)
+    10. fuzzy_duplicates          "Jon Smith" ~ "John Smith" + same fields: flag (or merge)
+    11. handle_outliers           IQR outliers: flag / cap / NaN; Isolation Forest: is_anomaly
+    12. impute                    NaN -> median / mode, or an ML imputer (knn, regression,
+                                  iterative), per column
 
 Missing codes and bad values become NaN first (steps 2-8), duplicates go next (so
-they do not bias the median), and only then are the gaps filled (step 10).
+they do not bias the median), outliers are handled, and only then are the gaps
+filled (step 12).
 Rows are never deleted except exact duplicates, and the input file is only read.
 """
 from __future__ import annotations
@@ -36,19 +40,33 @@ import numpy as np
 import pandas as pd
 
 from src.profiling.profiler import PLACEHOLDERS, profile_dataset, read_csv_raw, save_report
+from src.profiling.semantic import PII_TYPES
 from src.quality.score import quality_delta, quality_score
 
+from .evaluation import evaluate_imputers, save_evaluation
+from .fuzzy import FUZZY_THRESHOLD, MIN_AGREEMENT, find_fuzzy_duplicates
+from .imputers import METHODS, describe, impute_columns, is_numeric
+from .outliers import ANOMALY_SHARE, iqr_outliers, isolation_forest_rows, main_reason
 from .schema import canonical_forms, category_key, infer_schema, save_schema
 
 LOG_VERSION = "1.0"
 
 DEFAULT_CONFIG: dict[str, Any] = {
-    # imputation per column: "median" | "mean" | "mode" | "none". Columns not listed
-    # use the defaults below by schema type (dates, text and ids are never filled in:
-    # an invented email or hire date would be fake data).
+    # imputation per column: "median" | "mean" | "mode" | "knn" | "regression" |
+    # "iterative" | "none". Columns not listed use the defaults below by schema type
+    # ("median" on a category means its mode). Dates, text, ids and personal data are
+    # never filled in: an invented email or hire date would be fake data.
     "impute": {},
-    "numeric_strategy": "median",
-    "categorical_strategy": "mode",
+    # Default chosen by the Sprint 5 evaluation (hide 10% of known values, refill them):
+    # Bank Marketing  NRMSE iterative 0.50 vs median 1.08, accuracy 65.8% vs 51.8%;
+    # HR sample (columns unrelated by design) iterative 0.77 vs median 0.74, accuracy equal.
+    # Real data usually has related columns, so iterative wins where it matters.
+    "numeric_strategy": "iterative",
+    "categorical_strategy": "iterative",
+    # Columns the ML imputers must NOT look at. "y" is the Bank Marketing label (did the
+    # client subscribe?): using it to fill other columns would leak the answer into the
+    # inputs of a later model (target leakage).
+    "exclude_features": ["y"],
     # Codes that carry a MEANING, so they are not missing values to fill in.
     # UCI Bank Marketing: pdays = days since the client was last contacted, and
     # 999 = "never contacted before". Imputing a number there would invent contacts.
@@ -58,15 +76,40 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "pdays": {"code": 999, "flag_column": "previously_contacted",
                   "code_means": "no", "otherwise": "yes"},
     },
+    # Categorical columns where "unknown" carries information, so it is NOT a gap to fill.
+    # UCI Bank Marketing: default = "has credit in default?"; 20.9% answer "unknown".
+    # A client who does not say may be a risk signal, and imputing the mode would turn
+    # all of them into "no" (it even made 2 different clients identical in Sprint 4).
+    # In these columns every missing code (and empty cell) becomes the category "unknown".
+    "keep_as_category": ["default"],
     # override or add business rules, e.g. {"age": [18, 100]}
     "valid_ranges": {},
     # ambiguous dates like 05/06/2020: True = 5 June (day first), False = May 6
     # (only used when no value in the column shows the order, e.g. 20/09/2023)
     "dayfirst": True,
+    # Outliers (IQR, per column): "flag" (default: new <column>_outlier 0/1 column, value
+    # kept), "cap" (clip to the IQR fences), "nan" (set to NaN, then imputed) or "none".
+    # Per column in "outliers", e.g. {"salary": "cap"}. Rows are never deleted.
+    "outlier_action": "flag",
+    "outliers": {},
+    # Isolation Forest marks this share of the most unusual rows in is_anomaly (0 = off)
+    "anomaly_share": ANOMALY_SHARE,
+    # Fuzzy duplicates: rows whose names are similar (rapidfuzz score >= threshold, 0-100)
+    # AND whose other fields mostly agree. Default: flag both rows (possible_duplicate = 1).
+    # Pairs with a name score >= fuzzy_merge_threshold are merged (later row removed);
+    # None = never merge. Name columns are found automatically (Module 1 person_name).
+    "fuzzy_threshold": FUZZY_THRESHOLD,
+    "fuzzy_min_agreement": MIN_AGREEMENT,
+    "fuzzy_merge_threshold": None,
+    "fuzzy_key_columns": None,
+    # hide 10% of known values and score every imputer on them (slower: off by default)
+    "evaluate_imputers": False,
     "max_examples": 3,
 }
 
-IMPUTE_STRATEGIES = {"median", "mean", "mode", "none"}
+IMPUTE_STRATEGIES = {*METHODS, "none"}
+# a feature column may be at most this share empty (pdays is 96% empty: no use as a feature)
+MAX_FEATURE_MISSING = 0.5
 
 # Which step carries out each Module 1 action. Actions not listed here are skipped
 # with the reason in SKIPPED_ACTIONS, so the log accounts for every suggestion.
@@ -81,10 +124,10 @@ ACTION_STEPS = {
     "standardise_case": ["normalise_categories"],
     "parse_dates_iso": ["parse_dates"],
     "set_invalid_to_nan": ["invalid_format_to_nan"],
+    "cap_outliers": ["outlier_flag", "outlier_cap", "outlier_to_nan"],
 }
+OUTLIER_ACTIONS = {"flag", "cap", "nan", "none"}
 SKIPPED_ACTIONS = {
-    "cap_outliers": "planned for Sprint 5 (outlier handling); impossible values are "
-                    "already set to NaN by impossible_value_to_nan",
     "mask_pii": "planned for Sprint 6 (PII protection)",
     "drop_column": "not automatic: dropping a column needs a person's decision",
     "review_values": "needs a person to look at the values",
@@ -113,6 +156,9 @@ class CleaningRun:
     steps: list[dict] = field(default_factory=list)
     no_impute: set[str] = field(default_factory=set)      # pdays, flag columns, ...
     added_columns: list[str] = field(default_factory=list)
+    kept_as_category: dict[str, int] = field(default_factory=dict)  # column -> "unknown" cells
+    outlier_stats: dict[str, int] = field(default_factory=dict)
+    fuzzy: dict[str, Any] = field(default_factory=dict)
 
     def cols(self, etype: str) -> list[str]:
         """Names of the columns whose schema expected_type is etype."""
@@ -187,6 +233,7 @@ def disguised_missing_to_nan(run: CleaningRun) -> None:
     Uses the exact codes Module 1 found (schema missing_codes) plus the placeholder
     list for any column. Columns with >= 50% missing get a <column>_missing 0/1 flag
     instead of being filled in (Module 1 action replace_with_nan_and_add_flag).
+    Columns in config keep_as_category keep "unknown" as a real category instead.
     """
     flag_cols = run.suggested("replace_with_nan_and_add_flag")
     for c in list(run.df.columns):
@@ -195,6 +242,9 @@ def disguised_missing_to_nan(run: CleaningRun) -> None:
         s = run.df[c]
         codes = run.schema["columns"].get(c, {}).get("missing_codes", [])
         is_missing = s.notna() & (s.isin(codes) | s.map(category_key).isin(PLACEHOLDERS))
+        if c in run.cols("categorical") and c in run.config["keep_as_category"]:
+            _keep_unknown(run, c, is_missing | s.isna())
+            continue
         new = s.mask(is_missing)
         run.record("disguised_missing_to_nan", c,
                    f"missing codes {sorted(set(s[is_missing]))} -> NaN", is_missing, s, new)
@@ -207,6 +257,20 @@ def disguised_missing_to_nan(run: CleaningRun) -> None:
             run.no_impute.update({c, name})
             run.record("add_missing_flag", name, f"1 when {c} was missing, else 0 "
                        f"(too much missing to fill in)", flag == 1, s, flag)
+
+
+def _keep_unknown(run: CleaningRun, column: str, is_missing: pd.Series) -> None:
+    """Missing codes and empty cells in a keep_as_category column become one category "unknown".
+
+    The column is added to no_impute: "unknown" is an answer, not a gap.
+    """
+    s = run.df[column]
+    new = s.mask(is_missing, "unknown")
+    run.record("keep_as_category", column, "missing codes and empty cells -> category "
+               "'unknown' (kept, not imputed)", is_missing & (s != "unknown"), s, new)
+    run.df[column] = new
+    run.no_impute.add(column)
+    run.kept_as_category[column] = int(is_missing.sum())
 
 
 def normalise_categories(run: CleaningRun) -> None:
@@ -311,41 +375,204 @@ def drop_duplicates(run: CleaningRun) -> None:
 
 
 def _strategy(run: CleaningRun, column: str) -> str:
-    """The imputation strategy for a column: from config, else by schema type."""
-    if column in run.no_impute:
+    """The imputation strategy for a column: from config, else by schema type.
+
+    Never for: pdays-like and flag columns (no_impute), dates, text, ids, personal data.
+    """
+    col = run.schema["columns"].get(column, {})
+    if column in run.no_impute or col.get("semantic_type") in PII_TYPES:
         return "none"
     if column in run.config["impute"]:
         return run.config["impute"][column]
-    etype = run.schema["columns"].get(column, {}).get("expected_type")
-    if etype == "numeric":
+    if col.get("expected_type") == "numeric":
         return run.config["numeric_strategy"]
-    if etype == "categorical":
+    if col.get("expected_type") == "categorical":
         return run.config["categorical_strategy"]
     return "none"
 
 
-def impute(run: CleaningRun) -> None:
-    """Step 10: fill the remaining NaN: median / mean for numbers, mode for categories."""
-    for c in run.df.columns:
-        s = run.df[c]
-        gaps = s.isna()
-        strategy = _strategy(run, c)
-        if not gaps.any() or strategy == "none" or s.notna().sum() == 0:
+def feature_columns(run: CleaningRun) -> list[str]:
+    """Columns the ML imputers may learn from: numbers and categories only.
+
+    Not: ids, text, dates, personal data, excluded columns (the label "y"), or columns
+    that are mostly empty.
+    """
+    out = []
+    for c in run.cols("numeric") + run.cols("categorical"):
+        col = run.schema["columns"][c]
+        if (col["semantic_type"] in PII_TYPES or c in run.config["exclude_features"]
+                or run.df[c].isna().mean() > MAX_FEATURE_MISSING):
             continue
-        if strategy == "mode":
-            value = s.mode().sort_values().iloc[0]      # ties: the first alphabetically
+        out.append(c)
+    return out
+
+
+def learning_frame(run: CleaningRun) -> pd.DataFrame:
+    """A copy of the data where FLAGGED outliers are hidden (NaN), for the imputers to learn from.
+
+    With the default action "flag", salary 9,999,999 stays in the output. If the imputers
+    learned from it, MICE filled missing HR salaries with ~187,000 instead of ~80,000.
+    So they learn from typical values only; the output keeps the flagged values unchanged.
+    """
+    df = run.df.copy()
+    for c in outlier_columns(run):
+        flag = f"{c}_outlier"
+        if flag in df.columns:
+            df[c] = df[c].mask(df[flag] == 1)
+    return df
+
+
+def impute(run: CleaningRun) -> None:
+    """Step 12: fill the remaining NaN with each column's method (median/mode or ML).
+
+    Columns that share an ML method are filled together in one call, so KNN and
+    iterative see all of them at once.
+    """
+    by_method: dict[str, list[str]] = {}
+    for c in run.df.columns:
+        strategy = _strategy(run, c)
+        if strategy != "none" and run.df[c].isna().any() and run.df[c].notna().any():
+            by_method.setdefault(strategy, []).append(c)
+    features = feature_columns(run)
+    learn = learning_frame(run)
+    for method, targets in by_method.items():
+        filled = impute_columns(learn, targets, features, method)
+        for c in targets:
+            s = run.df[c]
+            gaps = s.isna()
+            new = s.copy() if not is_numeric(s) else s.astype(float)
+            new[gaps] = filled.loc[gaps, c]                 # only the real gaps are filled
+            if method in ("median", "mean", "mode"):
+                # one value for every gap: show it, e.g. "median = 42" or "mode = Rome"
+                label = method if is_numeric(s) or method == "mode" else "mode"
+                value = _jsonable(new[gaps].iloc[0])
+                if isinstance(value, float) and value.is_integer():
+                    value = int(value)                  # "median = 35", not "35.0"
+                rule = f"{label} = {value}"
+            else:
+                rule = f"{describe(method)} using {len(features)} feature columns"
+            run.record("impute", c, rule, gaps, s, new)
+            run.df[c] = new
+
+
+def fuzzy_duplicates(run: CleaningRun) -> None:
+    """Step 10: near-duplicate rows (similar name + mostly equal fields): flag or merge.
+
+    Runs before imputation: filled-in values would make different people look alike.
+    """
+    cfg = run.config
+    keys = cfg["fuzzy_key_columns"] or [
+        c for c, s in run.schema["columns"].items()
+        if s["semantic_type"] == "person_name" and c in run.df.columns]
+    if not keys:
+        run.fuzzy = {"skipped": "no name column to compare (set fuzzy_key_columns)"}
+        return
+    compare = [c for c in run.df.columns if c not in keys and c not in run.added_columns
+               and run.schema["columns"].get(c, {}).get("expected_type") != "id"]
+    pairs = find_fuzzy_duplicates(run.df, keys, compare, cfg["fuzzy_threshold"],
+                                  cfg["fuzzy_min_agreement"])
+    merge_at = cfg["fuzzy_merge_threshold"]
+    to_merge = [p for p in pairs if merge_at is not None and p["name_similarity"] >= merge_at]
+    to_flag = [p for p in pairs if p not in to_merge]
+    n_ex = cfg["max_examples"]
+
+    def example(p: dict) -> dict:
+        return {"row": p["row_b"], "similar_to_row": p["row_a"],
+                "names": f"{p['name_a']} ~ {p['name_b']}", "name_similarity":
+                p["name_similarity"], "fields_equal": f"{p['fields_equal']}/{p['fields_compared']}"}
+
+    removed = sorted({p["row_b"] for p in to_merge} - {p["row_a"] for p in to_merge})
+    if removed:
+        run.steps.append({"step": "fuzzy_merge", "column": "<dataset>",
+                          "rule": f"name similarity >= {merge_at} and >= "
+                                  f"{cfg['fuzzy_min_agreement']:.0%} of fields equal: "
+                                  f"later row removed",
+                          "cells_changed": 0, "rows_changed": len(removed),
+                          "examples": [example(p) for p in to_merge[:n_ex]]})
+        run.df = run.df.drop(index=removed)
+    flag_rows = sorted({r for p in to_flag for r in (p["row_a"], p["row_b"])
+                        if r in run.df.index})
+    if flag_rows:
+        run.df["possible_duplicate"] = run.df.index.isin(flag_rows).astype(int)
+        run.added_columns.append("possible_duplicate")
+        run.no_impute.add("possible_duplicate")
+        run.steps.append({"step": "fuzzy_flag", "column": "possible_duplicate",
+                          "rule": f"name similarity >= {cfg['fuzzy_threshold']} and >= "
+                                  f"{cfg['fuzzy_min_agreement']:.0%} of fields equal: "
+                                  f"both rows flagged, nothing removed",
+                          "cells_changed": len(flag_rows), "rows_changed": len(flag_rows),
+                          "examples": [example(p) for p in to_flag[:n_ex]]})
+    run.fuzzy = {"key_columns": keys, "compared_columns": compare,
+                 "pairs_found": len(pairs), "rows_flagged": len(flag_rows),
+                 "rows_merged": len(removed), "pairs": pairs[:100]}
+
+
+def outlier_columns(run: CleaningRun) -> list[str]:
+    """Numeric columns checked for outliers: not added flags, not special-code columns (pdays)."""
+    return [c for c in run.cols("numeric")
+            if c not in run.added_columns and c not in run.no_impute]
+
+
+def handle_outliers(run: CleaningRun) -> None:
+    """Step 11: IQR outliers per column (flag / cap / nan) + Isolation Forest per row (flag).
+
+    Both detectors look at the data BEFORE any outlier is changed, so they are independent.
+    "nan" leaves a gap that the impute step fills; no row is ever deleted.
+    """
+    columns = outlier_columns(run)
+    masks = {c: iqr_outliers(run.df[c]) for c in columns}
+    anomalies = isolation_forest_rows(run.df, columns, run.config["anomaly_share"])
+    any_iqr = pd.Series(False, index=run.df.index)
+
+    for c, (is_out, fences) in masks.items():
+        action = run.config["outliers"].get(c, run.config["outlier_action"])
+        if fences is None or not is_out.any() or action == "none":
+            continue
+        any_iqr |= is_out
+        lo, hi = fences
+        s = run.df[c]
+        where = f"outside IQR fences [{lo:g}, {hi:g}]"
+        if action == "flag":
+            name = f"{c}_outlier"
+            flag = is_out.astype(int)
+            run.df.insert(run.df.columns.get_loc(c) + 1, name, flag)
+            run.added_columns.append(name)
+            run.no_impute.add(name)
+            run.record("outlier_flag", c, f"{where}: value kept, {name} = 1", is_out, s, flag)
+        elif action == "cap":
+            if run.schema["columns"][c].get("is_integer"):
+                lo, hi = np.ceil(lo), np.floor(hi)          # whole-number columns stay whole
+            new = s.clip(lo, hi)
+            run.record("outlier_cap", c, f"{where}: capped to [{lo:g}, {hi:g}]", is_out, s, new)
+            run.df[c] = new
         else:
-            value = float(s.median() if strategy == "median" else s.mean())
-            if run.schema["columns"].get(c, {}).get("is_integer"):
-                value = round(value)                    # keep whole-number columns whole
-        new = s.fillna(value)
-        run.record("impute", c, f"{strategy} = {_jsonable(value)}", gaps, s, new)
-        run.df[c] = new
+            new = s.mask(is_out)
+            run.record("outlier_to_nan", c, f"{where}: set to NaN, imputed later",
+                       is_out, s, new)
+            run.df[c] = new
+
+    if anomalies.any():
+        run.df["is_anomaly"] = anomalies.astype(int)
+        run.added_columns.append("is_anomaly")
+        run.no_impute.add("is_anomaly")
+        reasons = pd.Series("", index=run.df.index)
+        for r in anomalies[anomalies].index[: run.config["max_examples"]]:
+            reasons[r] = main_reason(run.df, columns, r)
+        run.record("isolation_forest", "is_anomaly",
+                   f"Isolation Forest: {run.config['anomaly_share']:.0%} most unusual rows "
+                   f"-> is_anomaly = 1 (values kept); before = the most unusual value",
+                   anomalies, reasons, run.df["is_anomaly"])
+    run.outlier_stats = {
+        "iqr_cells": int(sum(m.sum() for m, f in masks.values() if f is not None)),
+        "iqr_rows": int(any_iqr.sum()),
+        "isolation_forest_rows": int(anomalies.sum()),
+        "rows_found_by_both": int((any_iqr & anomalies).sum()),
+    }
 
 
 STEPS = [trim_whitespace, special_codes, disguised_missing_to_nan, normalise_categories,
          convert_to_number, parse_dates, invalid_format_to_nan, impossible_value_to_nan,
-         drop_duplicates, impute]
+         drop_duplicates, fuzzy_duplicates, handle_outliers, impute]
 
 
 # -------------------------------------------------------------- pipeline
@@ -367,6 +594,12 @@ def _suggestion_status(run: CleaningRun) -> list[dict]:
         steps = [st for st in ACTION_STEPS.get(action, []) if (st, col) in done]
         if steps:
             out.append({"column": col, "action": action, "status": "done", "by_steps": steps})
+        elif action == "cap_outliers" and col in run.no_impute:
+            out.append({"column": col, "action": action, "status": "skipped",
+                        "reason": "values have a special meaning (special code column)"})
+        elif col in run.kept_as_category:
+            out.append({"column": col, "action": action, "status": "overridden",
+                        "reason": "keep_as_category: 'unknown' is kept as its own category"})
         elif action in ACTION_STEPS:
             out.append({"column": col, "action": action, "status": "nothing_to_do",
                         "reason": "no matching values were left when the step ran"})
@@ -400,6 +633,12 @@ def _summary(run: CleaningRun, rows_before: int, cols_before: int) -> dict:
         "not_a_date_to_nan": total("parse_dates", rule_start="not a date"),
         "invalid_format_to_nan": total("invalid_format_to_nan"),
         "impossible_values_fixed": total("impossible_value_to_nan"),
+        "fuzzy_duplicates": {k: v for k, v in run.fuzzy.items()
+                             if k not in ("pairs", "key_columns", "compared_columns")},
+        "outliers": {**run.outlier_stats,
+                     "flagged": total("outlier_flag"), "capped": total("outlier_cap"),
+                     "set_to_nan": total("outlier_to_nan")},
+        "kept_as_category": dict(run.kept_as_category),
         "values_imputed": total("impute"),
         "cell_changes": sum(s["cells_changed"] for s in run.steps
                             if s["column"] not in run.added_columns),
@@ -415,13 +654,28 @@ def clean_dataset(df: pd.DataFrame, report: dict,
     """
     cfg = {**DEFAULT_CONFIG, **(config or {})}
     bad = {c: v for c, v in cfg["impute"].items() if v not in IMPUTE_STRATEGIES}
+    bad.update({k: cfg[k] for k in ("numeric_strategy", "categorical_strategy")
+                if cfg[k] not in IMPUTE_STRATEGIES})
+    bad_outliers = {c: a for c, a in {**cfg["outliers"], "*": cfg["outlier_action"]}.items()
+                    if a not in OUTLIER_ACTIONS}
+    if bad_outliers:
+        raise ValueError(f"unknown outlier action {bad_outliers}; use one of "
+                         f"{sorted(OUTLIER_ACTIONS)}")
     if bad:
         raise ValueError(f"unknown imputation strategy {bad}; use one of "
                          f"{sorted(IMPUTE_STRATEGIES)}")
     start = time.perf_counter()
     run = CleaningRun(df=df.copy(), schema=infer_schema(df, report), config=cfg,
                       suggestions=report.get("cleaning_suggestions", []))
+    evaluation, eval_seconds = None, 0.0
     for step in STEPS:
+        if step is impute and cfg["evaluate_imputers"]:
+            # score the imputers on this data: cleaned, but nothing filled in yet
+            t0 = time.perf_counter()
+            features = feature_columns(run)
+            evaluation = evaluate_imputers(       # without flagged outliers, as impute()
+                learning_frame(run), [c for c in features if c not in run.no_impute], features)
+            eval_seconds = time.perf_counter() - t0
         step(run)
     run.df = _whole_numbers_as_int(run.df)
 
@@ -435,8 +689,27 @@ def clean_dataset(df: pd.DataFrame, report: dict,
         "suggestions": _suggestion_status(run),
         "summary": _summary(run, len(df), df.shape[1]),
     }
-    log["summary"]["seconds"] = round(time.perf_counter() - start, 2)
+    # cleaning time only; the (optional) evaluation is timed on its own
+    log["summary"]["seconds"] = round(time.perf_counter() - start - eval_seconds, 2)
+    if run.fuzzy.get("pairs"):
+        log["fuzzy_duplicates"] = run.fuzzy             # the pairs with their scores
+    if evaluation is not None:
+        log["imputer_evaluation"] = evaluation
     return run.df, log
+
+
+def _schema_keep_unknown(schema: dict, columns: list[str]) -> None:
+    """In keep_as_category columns, "unknown" is an allowed value, not a missing code.
+
+    (Module 1 re-profiles the cleaned file and still calls "unknown" disguised missing.)
+    """
+    for c in columns:
+        col = schema["columns"].get(c)
+        if not col or col["expected_type"] != "categorical":
+            continue
+        col["missing_codes"] = [m for m in col["missing_codes"] if category_key(m) != "unknown"]
+        col["allowed_values"] = sorted(set(col["allowed_values"]) | {"unknown"})
+        col["unknown_is_category"] = True
 
 
 def clean_file(input_path: str | Path, out_dir: str | Path, report: dict | None = None,
@@ -475,7 +748,18 @@ def clean_file(input_path: str | Path, out_dir: str | Path, report: dict | None 
 
     schema = infer_schema(cleaned_raw, after)
     schema["source"] = "inferred from cleaned_data.csv (the data after cleaning)"
+    _schema_keep_unknown(schema, log["config"]["keep_as_category"])
     save_schema(schema, out_dir)
+
+    if "imputer_evaluation" in log:
+        # the full evaluation gets its own file + chart; the log keeps the averages
+        full = log.pop("imputer_evaluation")
+        files = save_evaluation(full, out_dir, title=input_path.name)
+        log["imputer_evaluation"] = {
+            "best": full.get("best"), "files": files,
+            "methods": {m: {k: v for k, v in r.items() if k != "columns"}
+                        for m, r in full.get("methods", {}).items()},
+        }
 
     log["input"] = {"file": str(input_path), "rows": int(len(raw)), "columns": int(raw.shape[1])}
     log["outputs"] = {"cleaned_data": str(cleaned_path),

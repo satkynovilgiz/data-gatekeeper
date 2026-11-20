@@ -67,19 +67,28 @@ the cleaning API and the final tests + presentation.
 **Deliverable:** `cleaned_data.csv` + `cleaning_log.json` + `schema.json` for Bank Marketing and HR.
 **Result:** quality score Bank 98.48 → 98.90, HR 88.86 → 99.83; 110 tests. See `docs/sprint4_summary.md`.
 
-### Sprint 5 ⏳ — ML imputation + outliers
-- KNN imputation, regression imputation, iterative imputation (scikit-learn)
-- Compare them with median / mode on held-out cells (hide known values, measure the error)
-- Outlier handling: cap (winsorise) or flag, configurable (kept in Sprint 5:
-  outliers distort the imputers, so they belong together)
-- Optional "keep `unknown` as its own category" for informative missing values (e.g. `default`)
+### Sprint 5 ✅ — ML-based cleaning
+- ✅ `unknown` kept as its own category where it carries meaning (`keep_as_category: ["default"]`);
+  the 2 identical rows from Sprint 4 are gone
+- ✅ KNN, regression and iterative (MICE) imputation (scikit-learn), per column or globally;
+  categories encoded / decoded; IDs and PII never imputed; the label `y` never used as a feature
+- ✅ Imputer evaluation: hide 10% of known values, RMSE / MAE / accuracy / time, JSON + chart →
+  `iterative` is the new default
+- ✅ Outliers: IQR (per column) + Isolation Forest (per row); flag (default) / cap / nan;
+  flagged outliers hidden from the imputers
+- ✅ Fuzzy duplicates with rapidfuzz (CadetX brief): flag by default, optional merge
+- ✅ CLI flags `--imputer`, `--outliers`, `--fuzzy-threshold`, `--fuzzy-merge`, `--evaluate-imputers`
 
 **Deliverable:** the pipeline can choose an imputer per column, with an accuracy comparison.
+**Result:** Bank iterative NRMSE 0.48 vs median 1.06; HR 8/8 fuzzy pairs found; quality Bank 98.48 → 98.91,
+HR 88.87 → 99.87; 167 tests. See `docs/sprint5_summary.md`.
 
 ### Sprint 6 ⏳ — Transformation + cleaning API + final
 - Scaling (standard, min-max, robust) and encoding (one-hot, ordinal) for ML-ready output
 - Mask or hash PII columns found by Module 1
 - Cleaning API: `POST /clean` (CSV → cleaned CSV + log)
+- Speed: fit the iterative imputer on a sample of rows for big files (now ≈ 49 s on 41k rows)
+- Optional `--imputer auto`: run the evaluation and use the best method per column
 - Final tests, Module 2 docs + presentation
 
 **Deliverable:** Module 2 complete: raw → clean → ML-ready, by CLI and API.

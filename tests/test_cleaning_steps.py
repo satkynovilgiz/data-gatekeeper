@@ -56,7 +56,7 @@ def test_pdays_999_becomes_previously_contacted_not_imputed():
     # ... and it is NOT imputed (no median filled into the 999 rows)
     assert not any(s["step"] == "impute" and s["column"] in ("pdays", "previously_contacted")
                    for s in log["steps"])
-    assert log["summary"]["columns_added"] == ["previously_contacted"]
+    assert log["summary"]["columns_added"][0] == "previously_contacted"
     assert log["summary"]["special_codes_to_flag"] == 20
 
 
@@ -141,23 +141,40 @@ def test_drop_duplicates_keeps_first_copy():
     assert entry["examples"][0] == {"row": 2, "duplicate_of_row": 0}
 
 
+def test_default_imputer_is_iterative():
+    assert DEFAULT_CONFIG["numeric_strategy"] == DEFAULT_CONFIG["categorical_strategy"] \
+        == "iterative"
+
+
 def test_impute_median_for_numbers_and_mode_for_categories():
-    df = pd.DataFrame({"age": ["20", "30", None, "40", "100"],
-                       "city": ["Rome", "Rome", "Paris", None, "Rome"]}, dtype=str)
-    cleaned, log = clean_dataset(df, profile_dataset(df, "t.csv"))
-    assert cleaned["age"].tolist() == [20, 30, 35, 40, 100]           # median of 20,30,40,100
-    assert cleaned["city"].tolist()[3] == "Rome"                       # mode
+    # (no outliers here: flagged outliers are hidden from the imputers, see test_outliers.py)
+    df = pd.DataFrame({"age": ["20", "30", None, "40", "60"],
+                       "colour": ["red", "red", "blue", None, "red"]}, dtype=str)
+    cleaned, log = clean_dataset(df, profile_dataset(df, "t.csv"),
+                                 {"numeric_strategy": "median", "categorical_strategy": "mode"})
+    assert cleaned["age"].tolist() == [20, 30, 35, 40, 60]            # median of 20,30,40,60
+    assert cleaned["colour"].tolist()[3] == "red"                      # mode
     rules = {s["column"]: s["rule"] for s in log["steps"] if s["step"] == "impute"}
-    assert rules == {"age": "median = 35", "city": "mode = Rome"}
+    assert rules == {"age": "median = 35", "colour": "mode = red"}
+
+
+def test_personal_data_is_never_imputed():
+    # Module 1 calls "city" an address (personal data): never filled in, with any method
+    df = pd.DataFrame({"age": [str(20 + i) for i in range(10)],
+                       "city": ["Rome", "Paris"] * 4 + [None, None]}, dtype=str)
+    for method in ("mode", "knn"):
+        cleaned, _ = clean_dataset(df, profile_dataset(df, "t.csv"),
+                                   {"categorical_strategy": method})
+        assert cleaned["city"].isna().sum() == 2
 
 
 def test_impute_strategy_configurable_per_column():
-    df = pd.DataFrame({"age": ["20", "30", None, "40", "100"],
-                       "score": ["1.0", "2.0", None, "3.0", "10.0"]}, dtype=str)
+    df = pd.DataFrame({"age": ["20", "30", None, "40", "60"],
+                       "score": ["1.0", "2.0", None, "3.0", "6.0"]}, dtype=str)
     cleaned, _ = clean_dataset(df, profile_dataset(df, "t.csv"),
                                {"impute": {"age": "none", "score": "mean"}})
     assert pd.isna(cleaned["age"].iloc[2])                             # left empty
-    assert cleaned["score"].iloc[2] == pytest.approx(4.0)              # mean of 1, 2, 3, 10
+    assert cleaned["score"].iloc[2] == pytest.approx(3.0)              # mean of 1, 2, 3, 6
 
 
 def test_unknown_strategy_is_rejected():
@@ -181,3 +198,92 @@ def test_input_dataframe_is_not_changed():
     before = df.copy()
     clean_dataset(df, profile_dataset(df, "t.csv"))
     pd.testing.assert_frame_equal(df, before)
+
+
+# ---------------------------------------------------------- Sprint 5: keep "unknown"
+def bank_like(default: list[str]) -> pd.DataFrame:
+    """A small bank-like table: 20 different clients with a 'default' column."""
+    n = len(default)
+    return pd.DataFrame({"age": [str(30 + i) for i in range(n)],
+                         "job": ["admin.", "technician"] * (n // 2),
+                         "default": default}, dtype=str)
+
+
+def test_unknown_kept_as_category_in_default():
+    df = bank_like(["no"] * 14 + ["unknown"] * 5 + [None])
+    cleaned, log = clean_dataset(df, profile_dataset(df, "bank.csv"))
+    # "unknown" stays, the empty cell joins it, nothing is imputed to "no"
+    assert cleaned["default"].value_counts().to_dict() == {"no": 14, "unknown": 6}
+    assert not any(s["step"] == "impute" and s["column"] == "default" for s in log["steps"])
+    assert log["summary"]["kept_as_category"] == {"default": 6}
+    statuses = {s["status"] for s in log["suggestions"] if s["column"] == "default"}
+    assert statuses == {"overridden"}
+
+
+def test_keep_as_category_is_configurable():
+    df = bank_like(["no"] * 15 + ["unknown"] * 5)
+    cleaned, _ = clean_dataset(df, profile_dataset(df, "bank.csv"), {"keep_as_category": []})
+    assert (cleaned["default"] == "no").all()                  # old Sprint 4 behaviour: mode
+
+
+def test_keeping_unknown_does_not_create_duplicates():
+    # Sprint 4 bug: two clients identical except default = unknown / no became
+    # duplicates after imputing the mode "no". Keeping "unknown" keeps them apart.
+    df = pd.DataFrame({"age": ["33", "33"] + [str(40 + i) for i in range(8)],
+                       "default": ["unknown", "no"] + ["no"] * 6 + ["unknown"] * 2},
+                      dtype=str)
+    cleaned, log = clean_dataset(df, profile_dataset(df, "bank.csv"))
+    assert len(cleaned) == 10 and not cleaned.duplicated().any()
+    cleaned_sprint4, _ = clean_dataset(df, profile_dataset(df, "bank.csv"),
+                                       {"keep_as_category": []})
+    assert cleaned_sprint4.duplicated().sum() == 1             # the bug, for comparison
+
+
+# ------------------------------------------------------------ Sprint 5: ML imputers
+def employees(n: int = 60) -> pd.DataFrame:
+    """years_experience = age - 22, so ML can predict a missing age; one ID column."""
+    df = pd.DataFrame({"employee_id": [f"E{i}" for i in range(n)],
+                       "age": [str(25 + i % 35) for i in range(n)],
+                       "years_experience": [str(3 + i % 35) for i in range(n)],
+                       "dept": ["Sales", "HR", "IT"] * (n // 3)}, dtype=str)
+    # gaps in the MIDDLE of the range: at the edge (the youngest), all 5 nearest
+    # neighbours are older, so KNN can only guess too high
+    df.loc[[15, 16, 17], "age"] = None
+    df.loc[[3, 4], "dept"] = None
+    return df
+
+
+@pytest.mark.parametrize("method", ["knn", "regression", "iterative"])
+def test_ml_imputer_in_pipeline(method):
+    df = employees()
+    cleaned, log = clean_dataset(df, profile_dataset(df, "hr.csv"),
+                                 {"numeric_strategy": method, "categorical_strategy": method})
+    # age is predicted from years_experience (age = years + 22), not the median 42
+    expected = df.loc[[15, 16, 17], "years_experience"].astype(int) + 22
+    assert (cleaned.loc[[15, 16, 17], "age"] - expected).abs().max() <= 3
+    assert cleaned["dept"].notna().all()
+    rules = {s["column"]: s["rule"] for s in log["steps"] if s["step"] == "impute"}
+    assert rules["age"].startswith(method)
+
+
+def test_per_column_imputer_overrides_global():
+    df = employees()
+    _, log = clean_dataset(df, profile_dataset(df, "hr.csv"),
+                           {"numeric_strategy": "knn", "impute": {"dept": "mode"}})
+    rules = {s["column"]: s["rule"] for s in log["steps"] if s["step"] == "impute"}
+    assert rules["age"].startswith("knn") and rules["dept"].startswith("mode")
+
+
+def test_features_skip_ids_label_and_mostly_empty_columns():
+    df = employees()
+    df["y"] = ["yes", "no"] * 30
+    df["mostly_empty"] = [None] * 50 + [str(i) for i in range(10)]
+    run = make_run(df.to_dict("list"))
+    cleaner.convert_to_number(run)
+    assert set(cleaner.feature_columns(run)) == {"age", "years_experience", "dept"}
+
+
+def test_unknown_global_strategy_is_rejected():
+    df = employees()
+    with pytest.raises(ValueError, match="unknown imputation strategy"):
+        clean_dataset(df, profile_dataset(df, "hr.csv"), {"numeric_strategy": "magic"})

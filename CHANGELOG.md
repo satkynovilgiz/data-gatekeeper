@@ -3,6 +3,44 @@
 All notable changes to Data Gatekeeper. Format based on [Keep a Changelog](https://keepachangelog.com/);
 versions follow the `report_version` of `profiling_report.json`.
 
+## [1.4] — 2026-11-20 — Sprint 5: Module 2 ML-based cleaning
+`profiling_report.json` stays at 1.2, `cleaning_log.json` and `schema.json` at 1.0 (new fields only).
+New file: `imputer_evaluation.json` 1.0.
+
+### Added
+- **ML imputation** (`src/cleaning/imputers.py`): `knn` (k = 5), `regression` (linear / logistic) and
+  `iterative` (MICE, 10 rounds) next to the median / mode baseline. Categories are one-hot encoded
+  and decoded; numbers are z-scored, clipped to the known range and rounded for whole-number columns.
+  Set globally (`numeric_strategy`, `categorical_strategy`, `--imputer`) or per column (`impute`).
+  Never imputed or used as features: IDs, text, dates, personal data, the label (`exclude_features: ["y"]`).
+- **Imputer evaluation** (`src/cleaning/evaluation.py`, `--evaluate-imputers`): hide 10% of the known
+  values (seed 42), refill them with every method, report RMSE, MAE, NRMSE, accuracy and run time;
+  `imputer_evaluation.json` + a comparison chart.
+- **Outliers** (`src/cleaning/outliers.py`): IQR per column + Isolation Forest per row (`is_anomaly`).
+  Actions per column or `--outliers`: `flag` (default, `<col>_outlier`), `cap` (IQR fences), `nan`.
+- **Fuzzy duplicates** (`src/cleaning/fuzzy.py`, rapidfuzz): similar names (`token_sort_ratio` ≥ 85)
+  **and** ≥ 80% of the other fields equal → `possible_duplicate = 1`; optional merge (`--fuzzy-merge`).
+- **`keep_as_category: ["default"]`**: `unknown` in Bank Marketing `default` is kept as its own category
+  instead of being imputed; the suggestion is logged as `overridden`, `schema.json` allows `unknown`.
+- CLI flags: `--imputer`, `--outliers`, `--fuzzy-threshold`, `--fuzzy-merge`, `--evaluate-imputers`.
+- HR sample data: 8 re-typed (near-duplicate) employees appended; the original 515 rows are unchanged.
+- `rapidfuzz` in `requirements.txt`. Tests: 110 → 167.
+
+### Changed
+- **Default imputer is now `iterative`** (was median / mode), chosen by the evaluation:
+  Bank Marketing NRMSE 0.48 vs 1.06, accuracy 67.5% vs 51.8%. Cleaning the full bank file takes
+  ≈ 49 s instead of ≈ 2 s; use `--imputer median` for quick runs.
+- Flagged outliers are hidden from the imputers while they learn (the output keeps them).
+- Personal data (Module 1 PII types, e.g. a `city` column) is never imputed.
+- Default fuzzy threshold 85 (finds 8/8 planted pairs on the HR sample, 90 finds 6/8; 0 false pairs).
+
+### Fixed
+- Sprint 4: imputing `default = unknown` → `no` made 2 different bank clients identical; now 0 duplicates.
+- Iterative imputation of categories always chose the same value (full one-hot columns predicted each
+  other); fixed with drop-first encoding (46% → 100% on the test data).
+- False "divide by zero in matmul" warnings from numpy 2 + macOS Accelerate are silenced around the
+  scikit-learn calls (results checked: finite, same as `einsum`).
+
 ## [1.3] — 2026-11-19 — Sprint 4: Module 2 core cleaning pipeline
 `profiling_report.json` stays at version 1.2. New files: `cleaning_log.json` 1.0 and `schema.json` 1.0.
 
