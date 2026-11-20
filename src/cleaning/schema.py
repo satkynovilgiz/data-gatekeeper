@@ -46,6 +46,10 @@ BUSINESS_RULES: dict[str, tuple[float | None, float | None]] = {
 # Text formats Module 3 can check with a regex (taken from Module 1's semantic detection)
 TEXT_FORMATS = ("email", "phone", "postcode", "url", "ip_address")
 
+# Meanings found from the VALUES (they match a format), so the column is free text and
+# never a category. Name-only hints like "city" are left alone: a city IS a category.
+FREE_TEXT_SEMANTICS = set(TEXT_FORMATS) | {"credit_card"}
+
 
 def business_rule(column: str) -> tuple[str, list[float | None]] | None:
     """Return (rule word, [low, high]) if a business rule matches the column name, else None.
@@ -68,6 +72,10 @@ def expected_type(col: dict) -> str:
         return "date"
     if basic == "numeric":
         return "numeric"
+    if sem in FREE_TEXT_SEMANTICS:
+        # an email or a name is free text even in a small file where Module 1 calls it
+        # "categorical" (<= 20 distinct values) — so it is never filled with the mode
+        return "text"
     if basic in ("categorical", "boolean"):
         return "categorical"
     return "text"
