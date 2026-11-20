@@ -21,7 +21,7 @@ import re
 import pandas as pd
 from rapidfuzz import fuzz, process
 
-FUZZY_THRESHOLD = 90          # name similarity 0-100
+FUZZY_THRESHOLD = 85          # name similarity 0-100 (HR sample: 85 finds 8/8 pairs, 90 only 6/8)
 MIN_AGREEMENT = 0.8           # share of the other fields that must be equal
 
 
