@@ -57,8 +57,12 @@ DEFAULT_CONFIG: dict[str, Any] = {
     # ("median" on a category means its mode). Dates, text, ids and personal data are
     # never filled in: an invented email or hire date would be fake data.
     "impute": {},
-    "numeric_strategy": "median",
-    "categorical_strategy": "mode",
+    # Default chosen by the Sprint 5 evaluation (hide 10% of known values, refill them):
+    # Bank Marketing  NRMSE iterative 0.50 vs median 1.08, accuracy 65.8% vs 51.8%;
+    # HR sample (columns unrelated by design) iterative 0.77 vs median 0.74, accuracy equal.
+    # Real data usually has related columns, so iterative wins where it matters.
+    "numeric_strategy": "iterative",
+    "categorical_strategy": "iterative",
     # Columns the ML imputers must NOT look at. "y" is the Bank Marketing label (did the
     # client subscribe?): using it to fill other columns would leak the answer into the
     # inputs of a later model (target leakage).

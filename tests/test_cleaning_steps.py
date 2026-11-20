@@ -141,10 +141,16 @@ def test_drop_duplicates_keeps_first_copy():
     assert entry["examples"][0] == {"row": 2, "duplicate_of_row": 0}
 
 
+def test_default_imputer_is_iterative():
+    assert DEFAULT_CONFIG["numeric_strategy"] == DEFAULT_CONFIG["categorical_strategy"] \
+        == "iterative"
+
+
 def test_impute_median_for_numbers_and_mode_for_categories():
     df = pd.DataFrame({"age": ["20", "30", None, "40", "100"],
                        "colour": ["red", "red", "blue", None, "red"]}, dtype=str)
-    cleaned, log = clean_dataset(df, profile_dataset(df, "t.csv"))
+    cleaned, log = clean_dataset(df, profile_dataset(df, "t.csv"),
+                                 {"numeric_strategy": "median", "categorical_strategy": "mode"})
     assert cleaned["age"].tolist() == [20, 30, 35, 40, 100]           # median of 20,30,40,100
     assert cleaned["colour"].tolist()[3] == "red"                      # mode
     rules = {s["column"]: s["rule"] for s in log["steps"] if s["step"] == "impute"}
