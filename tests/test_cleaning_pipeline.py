@@ -152,3 +152,27 @@ def test_schema_allows_unknown_in_keep_as_category_column(tmp_path):
     assert default["allowed_values"] == ["no", "unknown"]
     assert default["missing_codes"] == []
     assert default["unknown_is_category"] is True
+
+
+# ------------------------------------------------------------ Sprint 5 CLI flags
+def test_cli_ml_flags(messy, tmp_path):
+    out = tmp_path / "out"
+    result = run_cli("--input", str(messy), "--output", str(out), "--imputer", "knn",
+                     "--outliers", "cap", "--fuzzy-threshold", "90", "--evaluate-imputers")
+    assert result.returncode == 0, result.stderr
+    assert "Outliers:" in result.stdout and "Fuzzy duplicates:" in result.stdout
+    log = json.loads((out / "cleaning_log.json").read_text())
+    assert log["config"]["numeric_strategy"] == "knn"
+    assert log["config"]["categorical_strategy"] == "knn"
+    assert log["config"]["outlier_action"] == "cap"
+    assert log["config"]["fuzzy_threshold"] == 90
+    assert (out / "imputer_evaluation.json").exists()
+    assert "warning" not in result.stderr.lower()             # no noisy library warnings
+
+
+@pytest.mark.parametrize("flag, value", [("--imputer", "magic"), ("--outliers", "delete"),
+                                         ("--fuzzy-threshold", "150"), ("--fuzzy-merge", "-1")])
+def test_cli_rejects_bad_ml_flags(messy, tmp_path, flag, value):
+    result = run_cli("--input", str(messy), "--output", str(tmp_path), flag, value)
+    assert result.returncode != 0
+    assert not (tmp_path / "cleaned_data.csv").exists()
