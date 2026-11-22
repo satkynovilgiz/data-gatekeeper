@@ -3,6 +3,54 @@
 All notable changes to Data Gatekeeper. Format based on [Keep a Changelog](https://keepachangelog.com/);
 versions follow the `report_version` of `profiling_report.json`.
 
+## [1.5] — 2026-11-21 — Sprint 6: transformation, PII masking, API (Module 2 complete)
+`profiling_report.json` stays at 1.2, `cleaning_log.json` at 1.0 (one new field:
+`quality.after.flag_columns`). New files: `transform_report.json`, `transform_pipeline.joblib`,
+`pii_report.json`, `masked_data.csv`.
+
+### Fixed
+- **Quality score no longer rewards added columns.** The 0/1 flag columns that cleaning adds
+  (`<col>_outlier`, `is_anomaly`, `possible_duplicate`, `previously_contacted`, `<col>_missing`) are never
+  empty, so they raised completeness without fixing anything, and could change validity and consistency.
+  `quality_score(report, flag_columns=...)` now leaves them out of all four dimensions and reports
+  them apart (`flag_columns.completeness`). Profiling a raw file is unchanged.
+
+  | "after" score | Sprint 5 (flags counted) | Sprint 6 (flags left out) |
+  |---|---|---|
+  | Bank Marketing | 98.91 (+0.43) | **98.60 (+0.12)** |
+  | HR sample | 99.87 (+11.00) | **99.83 (+10.96)** |
+
+### Added
+- **Transformation** (`src/transform/`, `run_transform.py`). Per column, decided on the train rows, with a
+  written reason:
+  - one-hot for categories (`unknown` kept as its own column, rare values grouped once there are more than 15)
+  - ordinal for `education` (values outside the order get an indicator column)
+  - log1p or Yeo-Johnson for |skew| > 1 (whichever is more symmetric), skew before and after reported
+  - standard, robust (> 5% outliers) or minmax (≤ 10 distinct values) scaling
+  - optional bins (`--bins age=18,30,45,60,100`)
+  - IDs, PII, dates, free text and mostly-empty columns dropped, with a reason
+  - one scikit-learn `ColumnTransformer` **fitted on the train rows only**, saved with joblib, plus `transform_report.json`
+- **PII detection and masking** (`src/privacy/`, `run_masking.py`).
+  - Detection uses column name + content: email, phone, SSN, credit card (Luhn), IPv4, person name, street address, date of birth, zip code. Each result has a confidence score.
+  - Actions per column: `mask` (`j***@g***.com`), `hash` (HMAC-SHA256, salt from env `GATEKEEPER_PII_SALT`, consistent so joins still work), `drop`, `generalize` (DOB → age band, zip → `660**`, IP → `/24`) and `keep`.
+  - The report, logs and errors never contain a data value.
+- **Synthetic `data/raw/customers_pii.csv`** (300 rows, seeded). Every PII value comes from a reserved fake range. The HR file is byte-identical.
+- **API `src/api/app.py`**:
+  - Endpoints: `GET /health`, `POST /profile`, `/clean`, `/transform`, `/mask-pii`, with JSON output, or `?output=csv` to download the data.
+  - Upload rules: `.csv` only, ≤ 20 MB (checked from `Content-Length` before the body is read), ≤ 200,000 rows, parsed in memory.
+  - Errors: clear 400 / 413 / 422 / 503; a plain 500 with no stack trace, and only the error type is logged.
+  - `make api` runs it.
+- `scripts/make_figures.py` → `docs/figures/` (quality scores, imputer comparison, PII columns).
+- `docs/module2_summary.md` (presentation material), `docs/sprint6_summary.md`.
+- `pyproject.toml` `[project]` dependencies (incl. `joblib`, `fastapi`, `uvicorn`, `python-multipart`);
+  `joblib` in `requirements.txt`; CI runs `ruff check .` before the tests.
+- Tests: 167 → 219.
+
+### Changed
+- `src/api/profiling_api.py` is now an alias of `src/api/app.py`. The old `uvicorn` command still works, and
+  `tests/test_api.py` imports the new module.
+- `profiler.sniff_separator(text)` split out of `detect_separator(path)`, so the API never needs a temp file.
+
 ## [1.4] — 2026-11-20 — Sprint 5: Module 2 ML-based cleaning
 `profiling_report.json` stays at 1.2, `cleaning_log.json` and `schema.json` at 1.0 (new fields only).
 New file: `imputer_evaluation.json` 1.0.
