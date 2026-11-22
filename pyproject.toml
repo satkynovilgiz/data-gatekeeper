@@ -20,9 +20,10 @@ ignore = ["ANN401"]
 "scripts/**" = ["ANN"]
 
 [tool.ruff.lint.flake8-bugbear]
-# FastAPI declares upload fields as `file: UploadFile = File(...)` — that is the
-# official pattern, not the "mutable default argument" bug B008 looks for.
-extend-immutable-calls = ["fastapi.File"]
+# FastAPI declares upload fields as `file: UploadFile = File(...)` (and query
+# parameters as `Query(...)`) — that is the official pattern, not the "mutable default
+# argument" bug B008 looks for.
+extend-immutable-calls = ["fastapi.File", "fastapi.Query"]
 
 [tool.ruff.lint.isort]
 known-first-party = ["src"]
