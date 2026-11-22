@@ -31,3 +31,4 @@ and economic indicators (`emp.var.rate`, `cons.price.idx`, `cons.conf.idx`, `eur
 | `data/raw/bank_marketing.csv` | ❌ no (`.gitignore`, too big) | `python scripts/download_bank_marketing.py` |
 | `data/raw/bank_marketing_sample.csv` | ✅ yes (1,000 random rows, seed 42, ~140 KB) | `python scripts/download_bank_marketing.py --sample` |
 | `data/raw/hr_employees_messy.csv` | ✅ yes (synthetic, Sprint 1) | `python scripts/make_sample_data.py` |
+| `data/raw/customers_pii.csv` | ✅ yes (synthetic, Sprint 6: **fake** PII for the privacy module) | `python scripts/make_sample_data.py` |
