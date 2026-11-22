@@ -742,7 +742,9 @@ def clean_file(input_path: str | Path, out_dir: str | Path, report: dict | None 
     # Re-read the file exactly as a user of cleaned_data.csv would, then profile it
     cleaned_raw = read_csv_raw(cleaned_path)
     after = profile_dataset(cleaned_raw, dataset_name=cleaned_path.name)
-    before_score, after_score = quality_score(report), after["quality_score"]
+    # columns added by cleaning (flags) are scored apart, so they cannot inflate the score
+    before_score = quality_score(report)
+    after_score = quality_score(after, flag_columns=log["summary"]["columns_added"])
     log["quality"] = {"before": before_score, "after": after_score,
                       "delta": quality_delta(before_score, after_score)}
 

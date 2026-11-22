@@ -18,6 +18,12 @@ Completeness and uniqueness are counted per cell / per row because missing value
 and duplicates are counted that way. Validity and consistency are counted per
 column because these problems are fixed per column (one "lowercase" step fixes
 the whole column).
+
+Flag columns (Sprint 6): Module 2 ADDS 0/1 columns such as salary_outlier,
+possible_duplicate, is_anomaly or previously_contacted. They are never missing, so
+counting them made completeness look better without fixing anything. Pass their
+names as flag_columns: they are left out of all four dimensions and get their own
+small "flag_columns" section instead.
 """
 from __future__ import annotations
 
@@ -27,31 +33,55 @@ VALIDITY_RULES = {"mixed_types", "invalid_format_values"}
 CONSISTENCY_RULES = {"inconsistent_category_format", "inconsistent_date_format"}
 
 
-def _clean_columns_pct(report: dict, rules: set[str]) -> float:
-    """% of columns that have none of the given issues."""
-    n_cols = report["dataset"]["columns"]
-    if n_cols == 0:
+def _clean_columns_pct(report: dict, rules: set[str], skip: set[str]) -> float:
+    """% of columns (not counting the skipped ones) that have none of the given issues."""
+    bad = {i["column"] for i in report["issues"] if i["rule"] in rules} - skip
+    n_cols = report["dataset"]["columns"] - len(skip)
+    if n_cols <= 0:
         return 100.0
-    bad = {i["column"] for i in report["issues"] if i["rule"] in rules}
     return (n_cols - len(bad)) / n_cols * 100
 
 
-def quality_score(report: dict) -> dict:
-    """Return {"overall": 0-100, "dimensions": {...}, "weights": {...}} for a profiling report."""
+def _completeness(report: dict, skip: set[str]) -> float:
+    """100 - true missing cells % over the columns that are not skipped."""
+    if not skip:
+        return 100 - report["dataset"]["true_missing_cells_pct"]
+    cols = [c for c in report["columns"] if c["name"] not in skip]
+    cells = report["dataset"]["rows"] * len(cols)
+    missing = sum(c["true_missing_count"] for c in cols)
+    return 100 - (missing / cells * 100 if cells else 0)
+
+
+def quality_score(report: dict, flag_columns: list[str] | None = None) -> dict:
+    """Return {"overall": 0-100, "dimensions": {...}, "weights": {...}} for a profiling report.
+
+    flag_columns: columns added by cleaning (0/1 flags); scored apart, not in "overall".
+    """
     d = report["dataset"]
     rows = d["rows"]
+    skip = set(flag_columns or []) & {c["name"] for c in report.get("columns", [])}
     dims = {
-        "completeness": 100 - d["true_missing_cells_pct"],
+        "completeness": _completeness(report, skip),
         "uniqueness": 100 - (d["duplicate_rows"] / rows * 100 if rows else 0),
-        "validity": _clean_columns_pct(report, VALIDITY_RULES),
-        "consistency": _clean_columns_pct(report, CONSISTENCY_RULES),
+        "validity": _clean_columns_pct(report, VALIDITY_RULES, skip),
+        "consistency": _clean_columns_pct(report, CONSISTENCY_RULES, skip),
     }
     overall = sum(dims[k] * w for k, w in WEIGHTS.items())
-    return {
+    result = {
         "overall": round(overall, 2),
         "dimensions": {k: round(v, 2) for k, v in dims.items()},
         "weights": dict(WEIGHTS),
     }
+    if skip:
+        flags = [c for c in report["columns"] if c["name"] in skip]
+        cells = rows * len(flags)
+        filled = cells - sum(c["true_missing_count"] for c in flags)
+        result["flag_columns"] = {
+            "columns": sorted(skip),
+            "completeness": round(filled / cells * 100, 2) if cells else 100.0,
+            "note": "added by cleaning; not part of overall",
+        }
+    return result
 
 
 def quality_delta(before: dict, after: dict) -> dict:
