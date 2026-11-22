@@ -1,7 +1,8 @@
 """Generate a small, deliberately messy HR dataset for testing the pipeline.
 
 Run:  python scripts/make_sample_data.py
-Out:  data/raw/hr_employees_messy.csv
+Out:  data/raw/hr_employees_messy.csv   (HR, messy on purpose)
+      data/raw/customers_pii.csv        (Sprint 6: fake customers WITH fake PII)
 
 Replace this with your team's real dataset once you pick a domain.
 """
@@ -79,3 +80,60 @@ out = Path(__file__).resolve().parents[1] / "data" / "raw" / "hr_employees_messy
 out.parent.mkdir(parents=True, exist_ok=True)
 df.to_csv(out, index=False)
 print(f"Wrote {len(df)} rows -> {out}")
+
+
+# ---- Sprint 6: fake customers with fake personal data, for the PII module -------------
+# Bank Marketing has no PII, so we need a file that does. Every value is FAKE and chosen
+# from ranges that are reserved for examples, so no real person can be hit:
+#   emails  @example.com / .org / .net        (reserved by RFC 2606)
+#   phones  555-0100 .. 555-0199               (reserved for fiction in North America)
+#   SSNs    area 000 or 666                    (never issued by the US SSA)
+#   cards   public payment test numbers        (pass the Luhn check, cannot be charged)
+#   IPs     192.0.2.x, 198.51.100.x, 203.0.113.x  (TEST-NET documentation ranges)
+# Own seed, after the HR file is written, so the HR rows above stay byte-identical.
+rng3 = np.random.default_rng(2026)
+M = 300
+TEST_CARDS = ["4242424242424242", "4000056655665556", "5555555555554444",
+              "2223003122003222", "5200828282828210", "378282246310005",
+              "6011111111111117", "3056930009020004", "3566002020360505"]
+streets = ["Maple", "Oak", "Cedar", "Pine", "Elm", "Birch", "Willow", "Lakeview", "Hillside"]
+kinds = ["Street", "Avenue", "Road", "Lane", "Drive", "Blvd"]
+nets = ["192.0.2", "198.51.100", "203.0.113"]
+
+
+def card(number):
+    """Write a card number the way people type it: with spaces, dashes or nothing."""
+    style = rng3.integers(0, 3)
+    if style == 0:
+        return number
+    groups = [number[i:i + 4] for i in range(0, len(number), 4)]
+    return (" " if style == 1 else "-").join(groups)
+
+
+cust_names = [f"{rng3.choice(first)} {rng3.choice(last)}" for _ in range(M)]
+domains = rng3.choice(["example.com", "example.org", "example.net"], M)
+customers = pd.DataFrame({
+    "customer_id": [f"C{5000 + i}" for i in range(M)],
+    "full_name": cust_names,
+    "email": [f"{n.lower().replace(' ', '.')}{i}@{d}"
+              for i, (n, d) in enumerate(zip(cust_names, domains))],
+    "phone": [f"+1-{rng3.integers(200, 999)}-555-01{rng3.integers(0, 100):02d}" for _ in range(M)],
+    "ssn": [f"{rng3.choice(['000', '666'])}-{rng3.integers(1, 100):02d}-"
+            f"{rng3.integers(1, 10000):04d}" for _ in range(M)],
+    "credit_card": [card(rng3.choice(TEST_CARDS)) for _ in range(M)],
+    "ip_address": [f"{rng3.choice(nets)}.{rng3.integers(1, 255)}" for _ in range(M)],
+    "street_address": [f"{rng3.integers(1, 9999)} {rng3.choice(streets)} {rng3.choice(kinds)}"
+                       for _ in range(M)],
+    "zip_code": [f"{rng3.integers(10000, 99999)}" for _ in range(M)],
+    "date_of_birth": (pd.to_datetime("1950-01-01")
+                      + pd.to_timedelta(rng3.integers(0, 20000, M), unit="D")).strftime("%Y-%m-%d"),
+    "signup_date": (pd.to_datetime("2021-01-01")
+                    + pd.to_timedelta(rng3.integers(0, 1200, M), unit="D")).strftime("%Y-%m-%d"),
+    "plan": rng3.choice(["basic", "plus", "pro"], M, p=[0.5, 0.35, 0.15]),
+    "monthly_spend": rng3.gamma(2.0, 20.0, M).round(2),
+    "churned": rng3.choice(["no", "yes"], M, p=[0.8, 0.2]),
+})
+customers.loc[rng3.choice(M, 9, replace=False), "email"] = None      # a few gaps
+out2 = out.parent / "customers_pii.csv"
+customers.to_csv(out2, index=False)
+print(f"Wrote {len(customers)} rows -> {out2}  (all personal data is fake)")
