@@ -52,3 +52,29 @@ def test_quality_delta_for_module2():
     after = {"overall": 95.5, "dimensions": {"completeness": 100.0, "uniqueness": 100.0}}
     assert quality_delta(before, after) == {"overall": 15.5, "completeness": 10.0,
                                             "uniqueness": 20.0}
+
+
+def test_flag_columns_do_not_inflate_completeness():
+    # Sprint 6 fix: a 0/1 flag column is never empty. Counting it raised completeness
+    # completeness from 75% (1 of 4 cells in a) to 87.5% (1 of 8) without fixing anything.
+    df = pd.DataFrame({"a": ["x", None, "y", "z"], "a_outlier": ["0", "0", "1", "0"]})
+    report = profile_dataset(df)
+    assert quality_score(report)["dimensions"]["completeness"] == 87.5      # old way
+    q = quality_score(report, flag_columns=["a_outlier"])
+    assert q["dimensions"]["completeness"] == 75.0                          # real data only
+    assert q["flag_columns"] == {"columns": ["a_outlier"], "completeness": 100.0,
+                                 "note": "added by cleaning; not part of overall"}
+
+
+def test_flag_columns_left_out_of_validity():
+    df = pd.DataFrame({"a": ["1", "2", "3", "4"] * 5,
+                       "bad_flag": ["1"] * 18 + ["x", "y"]})                # mixed types
+    report = profile_dataset(df)
+    assert quality_score(report)["dimensions"]["validity"] == 50.0
+    assert quality_score(report, flag_columns=["bad_flag"])["dimensions"]["validity"] == 100.0
+
+
+def test_unknown_flag_names_are_ignored():
+    df = pd.DataFrame({"a": ["x", "y"]})
+    q = quality_score(profile_dataset(df), flag_columns=["not_there"])
+    assert q["overall"] == 100.0 and "flag_columns" not in q
