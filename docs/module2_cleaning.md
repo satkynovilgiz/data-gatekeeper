@@ -333,9 +333,14 @@ Example step:
  "examples": [{"row": 22, "before": 230.0, "after": null}, ...]}
 ```
 
-## Results: quality score before → after (Sprint 5 defaults)
+## Results: quality score before → after (Sprint 5 defaults, Sprint 6 score)
 The "after" score uses the **same** function as Module 1 (`src/quality/score.py`): `cleaned_data.csv` is
 read back and profiled like any new file, then `quality_delta(before, after)` is computed.
+
+**Sprint 6 fix:** columns that cleaning *adds* (`<col>_outlier`, `is_anomaly`, `possible_duplicate`,
+`previously_contacted`, `<col>_missing`) are left out of the score and reported apart under
+`quality.after.flag_columns`. They are never empty, so they used to raise completeness without fixing
+anything: Bank 98.91 → **98.60**, HR 99.87 → **99.83** ("after" only; "before" has no flag columns).
 
 | | Bank Marketing (41,188 × 21) | HR messy sample (523 × 10) |
 |---|---|---|
@@ -349,8 +354,9 @@ read back and profiled like any new file, then `quality_delta(before, after)` is
 | Impossible values → NaN | 0 | 10 (`age 230`) |
 | Outliers: IQR cells / Isolation Forest rows / both | 6,283 / 412 / 226 (flagged) | 7 / 6 / 5 (flagged) |
 | Values imputed (iterative) | 4,120 | 89 |
-| **Quality score** | **98.48 → 98.91 (+0.43)** | **88.87 → 99.87 (+11.00)** |
-| completeness / uniqueness / validity / consistency Δ | +1.72 / +0.03 / 0 / 0 | +1.11 / +2.87 / +20 / +20 |
+| **Quality score** (Sprint 6, flags left out) | **98.48 → 98.60 (+0.12)** | **88.87 → 99.83 (+10.96)** |
+| completeness / uniqueness / validity / consistency Δ | +0.48 / +0.03 / 0 / 0 | +0.95 / +2.87 / +20 / +20 |
+| Quality score as reported in Sprint 5 (flags counted) | 98.48 → 98.91 | 88.87 → 99.87 |
 | Time: cleaning / evaluation / whole CLI | 52.7 s / 14.4 s / 77 s | 1.3 s / 0.1 s / 4.2 s |
 
 Sprint 4 → 5 on the bank data: 12,718 → 4,121 cells turned into NaN (the 8,597 `default = unknown`
@@ -359,16 +365,17 @@ numbers are not directly comparable with Sprint 4 (88.86 → 99.83).
 
 ## Known limitations (next sprints)
 - **Iterative is slow on big files** (≈ 50 s for the 41k-row bank file). Use `--imputer median` for quick runs.
-- **The completeness score rewards extra columns.** Flag columns (`<col>_outlier`, `is_anomaly`) have no
-  empty cells, so they raise "% of cells filled" a little without fixing anything. The kept `unknown`
-  values still count as missing in Module 1's completeness (Module 1 does not know about `keep_as_category`).
+- ~~The completeness score rewards extra columns~~ — fixed in Sprint 6 (flag columns scored apart).
+  Still open: the kept `unknown` values and the empty `pdays` cells count as missing in Module 1's
+  completeness (Module 1 does not know they are meaningful), which is why Bank stays below 99.
 - **The evaluation hides values completely at random.** Real gaps are often not random (people skip
   questions for a reason), so real-world accuracy may be lower.
 - **KNN cannot predict beyond what it has seen**: for the youngest or oldest rows all neighbours lie on one
   side, so its guess is pulled to the middle.
 - **Fuzzy matching needs a name column** and compares within blocks by first letter: a typo in the first
   letter (`"Jhon"` vs `"John"` is fine, `"Kohn"` vs `"John"` is not) is missed.
-- **PII is not masked yet** (`full_name`, `email`, `phone`) → Sprint 6.
+- PII is masked by a separate step (`run_masking.py`, `src/privacy/`), not inside `run_cleaning.py`:
+  run it on the cleaned file. See [`module2_summary.md`](module2_summary.md).
 - Business rules are a small fixed list matched on column names. A column named in another language
   gets no rule (set it with `valid_ranges` in the config).
 - Ambiguous dates (`05/06/2020`) follow the order found elsewhere in the column; if no value tells, day first.
