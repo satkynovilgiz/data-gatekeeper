@@ -23,5 +23,11 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
+      - name: Lint with ruff
+        run: ruff check .
+
       - name: Run tests
+        env:
+          # a throwaway salt for the PII hashing tests (real salts never go in the repo)
+          GATEKEEPER_PII_SALT: ci-only-not-secret
         run: pytest -q

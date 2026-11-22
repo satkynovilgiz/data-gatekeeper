@@ -434,14 +434,18 @@ def profile_dataset(df: pd.DataFrame, dataset_name: str = "dataset",
     return json.loads(json.dumps(report, default=_py))
 
 
-def detect_separator(path: str | Path) -> str:
-    """Guess the CSV separator (, ; tab |) from the first lines of the file."""
-    with open(path, newline="", encoding="utf-8", errors="replace") as f:
-        sample = f.read(64_000)
+def sniff_separator(sample: str) -> str:
+    """Guess the CSV separator (, ; tab |) from some text (the first lines of a file)."""
     try:
         return csv.Sniffer().sniff(sample, delimiters=",;\t|").delimiter
     except csv.Error:
         return ","   # could not tell (e.g. a single column) -> use the default
+
+
+def detect_separator(path: str | Path) -> str:
+    """Guess the CSV separator (, ; tab |) from the first lines of the file."""
+    with open(path, newline="", encoding="utf-8", errors="replace") as f:
+        return sniff_separator(f.read(64_000))
 
 
 def read_csv_raw(path: str | Path) -> pd.DataFrame:

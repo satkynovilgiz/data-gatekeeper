@@ -83,15 +83,19 @@ the cleaning API and the final tests + presentation.
 **Result:** Bank iterative NRMSE 0.48 vs median 1.06; HR 8/8 fuzzy pairs found; quality Bank 98.48 → 98.91,
 HR 88.87 → 99.87; 167 tests. See `docs/sprint5_summary.md`.
 
-### Sprint 6 ⏳ — Transformation + cleaning API + final
-- Scaling (standard, min-max, robust) and encoding (one-hot, ordinal) for ML-ready output
-- Mask or hash PII columns found by Module 1
-- Cleaning API: `POST /clean` (CSV → cleaned CSV + log)
-- Speed: fit the iterative imputer on a sample of rows for big files (now ≈ 49 s on 41k rows)
-- Optional `--imputer auto`: run the evaluation and use the best method per column
-- Final tests, Module 2 docs + presentation
+### Sprint 6 ✅ — Transformation + PII masking + API + final
+- ✅ Quality score fix: flag columns added by cleaning are scored apart
+- ✅ Scaling (standard, robust, min-max) and encoding (one-hot, ordinal) per column with a reason;
+  log / Yeo-Johnson for skewed columns; optional bins; fitted on train only, saved with joblib
+- ✅ PII detection (9 types) + mask / salted hash / drop / generalize, PII report without values
+- ✅ API: `/health`, `/profile`, `/clean`, `/transform`, `/mask-pii` with upload limits
+- ✅ Module 2 summary + charts, tests 167 → 219, ruff in CI
+- ➡️ Moved to Sprint 7+: faster iterative imputation on big files, optional `--imputer auto`,
+  date features (year / month) in the transform
 
 **Deliverable:** Module 2 complete: raw → clean → ML-ready, by CLI and API.
+**Result:** Bank quality 98.48 → 98.60 and HR 88.87 → 99.83 (honest score); Bank 26 → 63 model columns,
+fitted on 32,940 train rows only; 9/9 fake PII columns found, 0 in Bank; 219 tests. See `docs/sprint6_summary.md`.
 
 ---
 

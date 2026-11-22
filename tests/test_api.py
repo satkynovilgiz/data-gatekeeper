@@ -3,8 +3,8 @@ from pathlib import Path
 
 from fastapi.testclient import TestClient
 
-from src.api import profiling_api
-from src.api.profiling_api import app
+from src.api import app as api_module
+from src.api.app import app
 from tests.test_schema import assert_valid
 
 client = TestClient(app)
@@ -63,7 +63,7 @@ def test_rejects_broken_csv():
 
 
 def test_rejects_too_large_file(monkeypatch):
-    monkeypatch.setattr(profiling_api, "MAX_UPLOAD_MB", 0.0001)   # limit ~100 bytes
+    monkeypatch.setattr(api_module, "MAX_UPLOAD_MB", 0.0001)   # limit ~100 bytes
     big = b"a,b\n" + b"1,2\n" * 100
     r = client.post("/profile", files={"file": ("big.csv", big, "text/csv")})
     assert r.status_code == 413
