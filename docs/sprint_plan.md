@@ -123,12 +123,22 @@ with major drift on exactly the 3 changed columns; 297 tests. See `docs/sprint-0
 missing / malformed values, but unrecognised `999` sentinels hurt with the iterative imputer; 351 tests.
 See `docs/sprint-08.md`.
 
-### Sprint 9 ⏳ — Schema + drift checks
-- Auto-generate expectations from a "good" dataset
-- Detect drift between two versions of a dataset (new categories, shifted means)
-- Module 3 docs + presentation
+### Sprint 9 🔄 — Finish Module 3: sentinel fix, anomalies, one validation report
+(Schema checks and drift were already done in Sprint 7, so this sprint does the rest of Module 3.)
+- 🔄 **Sentinel fix** (found by the Sprint 8 robustness test): on new rows, values outside the train
+  (or contract) range and unseen common sentinels (999, 9999, -1, -999) become missing *before*
+  imputation; the imputer falls back to median / mode when its inputs are still out of range.
+  Re-run the Sprint 8 robustness study and compare before / after.
+- 🔄 **Anomaly detection** (`src/validation/anomaly.py`, reusing `src/cleaning/outliers.py`):
+  robust z (median / MAD), IQR, Isolation Forest scores; top-k explanations (leave-one-column-out
+  for the forest); honest evaluation on 1% injected anomalies of 3 kinds, settings fixed in advance.
+- 🔄 **One Module 3 report**: `gatekeeper anomalies`, `validate --reference --anomalies` →
+  `validation_report.json` (+ JSON Schema); an `anomalies` pipeline step; API `/validate`, `/drift`,
+  `/anomalies`.
+- 🔄 **Wrap-up**: Module 3 presentation, Sprint 9 report, plan for Module 4.
 
-**Deliverable:** Module 3 complete: clean data gets a pass/fail and an anomaly list.
+**Deliverable:** Module 3 complete: new data gets a contract pass/fail, drift, an explained anomaly
+list, and the sentinel weakness is fixed and measured.
 
 ---
 
