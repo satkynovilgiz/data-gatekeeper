@@ -84,14 +84,16 @@ def test_full_run_writes_summary_with_every_step(tmp_path, monkeypatch):
     assert steps == list(ORDER)                                  # in the configured order
     status = {s["step"]: s["status"] for s in summary["steps"]}
     assert status == {"profile": "passed", "validate": "passed", "clean": "passed",
-                      "mask_pii": "passed", "quality": "passed", "drift": "passed",
-                      "impact": "skipped"}
+                      "mask_pii": "passed", "quality": "passed", "anomalies": "passed",
+                      "drift": "passed", "impact": "skipped"}
     assert out.parent == tmp_path and out.name.startswith("run_")
     assert summary_of(out) == json.loads(json.dumps(summary, default=str))
     md = (out / "summary.md").read_text()
-    assert "| 1 | profile | passed" in md and "| 7 | impact | skipped" in md
+    assert "| 1 | profile | passed" in md and "| 8 | impact | skipped" in md
+    assert "| 6 | anomalies | passed" in md
     for f in ("profiling_report.json", "orders_contract.json", "pii_report.json",
-              "masked_data.csv", "quality.json", "orders_drift.json", "clean/cleaned_data.csv"):
+              "masked_data.csv", "quality.json", "orders_anomalies.json", "orders_drift.json",
+              "clean/cleaned_data.csv"):
         assert (out / f).exists(), f
     assert all("seconds" in s for s in summary["steps"] if s["status"] != "skipped")
     masked = (out / "masked_data.csv").read_text()
@@ -199,3 +201,41 @@ def test_cli_impact_on_a_small_sample(tmp_path):
     assert "B-A" in r.stdout
     r = gk("impact", "data/raw/bank_marketing_sample.csv", "--target", "nope")
     assert r.returncode == 2 and "not found" in r.stderr
+
+
+# ----------------------------------------------------------- anomalies (Sprint 9)
+def test_anomalies_step_reports_and_gates(tmp_path):
+    sample = ROOT / "data/raw/bank_marketing_sample.csv"
+    cfg = config(tmp_path, ["quality", {"anomalies": {"exclude": ["y"], "top": 3}}],
+                 input_file=sample)
+    code, summary, out = run_pipeline(cfg)
+    assert code == 0
+    step = summary["steps"][1]
+    assert step["step"] == "anomalies" and step["status"] == "passed"
+    assert step["result"]["flagged"] == 10 and len(step["result"]["top_rows"]) == 3
+    section = json.loads((out / "bank_marketing_sample_anomalies.json").read_text())
+    assert "y" not in section["features"]
+    assert "anomalies | passed" in (out / "summary.md").read_text()
+
+    gate = config(tmp_path, [{"anomalies": {"exclude": ["y"], "fail_on_share": 0.005}},
+                             {"drift": {"reference": str(sample)}}], input_file=sample)
+    code, summary, _ = run_pipeline(gate)
+    assert code == 1
+    assert [s["status"] for s in summary["steps"]] == ["failed", "not_run"]
+
+
+@pytest.mark.parametrize("opts, message", [
+    ({"method": "lof"}, "anomalies.method"),
+    ({"top": 0}, "anomalies.top"),
+    ({"fail_on_share": 1.5}, "fail_on_share"),
+    ({"exclude": "y"}, "anomalies.exclude"),
+    ({"limit": 3}, "unknown option"),
+])
+def test_bad_anomaly_options(opts, message):
+    with pytest.raises(ConfigError, match=message):
+        parse_config({"input": "x.csv", "steps": [{"anomalies": opts}]})
+
+
+def test_anomalies_must_come_after_quality_and_before_drift():
+    with pytest.raises(ConfigError, match="must keep this order"):
+        parse_config({"input": "x.csv", "steps": [{"drift": {"reference": "r"}}, "anomalies"]})
