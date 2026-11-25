@@ -206,6 +206,23 @@ def cmd_impact(args: argparse.Namespace) -> int:
     return EXIT_OK
 
 
+def cmd_run(args: argparse.Namespace) -> int:
+    """`run`: every configured step in order; stops at a failed gate (exit 1)."""
+    from src.pipeline.run import ConfigError, load_config, run_pipeline
+
+    try:
+        cfg = load_config(args.config)
+        code, summary, out = run_pipeline(cfg, skip=set(args.skip))
+    except ConfigError as e:
+        raise InputError(str(e)) from None
+    for s in summary["steps"]:
+        detail = s.get("error") or s.get("reason") or ""
+        print(f"{s['step']:9} {s['status'].upper():8} {s.get('seconds', '-'):>7}  {detail}")
+    print(f"\n{summary['status'].upper()} (exit {code}) in {summary['total_seconds']} s")
+    print(f"Summary -> {out / 'summary.md'}")
+    return code
+
+
 def build_parser() -> argparse.ArgumentParser:
     """The argparse parser with the contract / validate / drift sub-commands."""
     p = argparse.ArgumentParser(prog="gatekeeper", description=__doc__.split("\n\n")[0],
@@ -248,6 +265,12 @@ def build_parser() -> argparse.ArgumentParser:
     imp.add_argument("--sample", type=int, help="use N stratified rows (quick runs)")
     imp.add_argument("--reports-dir", default="reports", help="where the reports go")
     imp.set_defaults(func=cmd_impact)
+
+    run = sub.add_parser("run", help="run the steps of a pipeline YAML in order")
+    run.add_argument("--config", required=True, help="pipeline YAML, e.g. pipeline.yaml")
+    run.add_argument("--skip", action="append", default=[], metavar="STEP",
+                     help="skip a step, e.g. --skip impact (repeatable)")
+    run.set_defaults(func=cmd_run)
     return p
 
 
