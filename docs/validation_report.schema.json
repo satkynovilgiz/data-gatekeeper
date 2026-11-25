@@ -1,0 +1,192 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/satkynovilgiz/data-gatekeeper/docs/validation_report.schema.json",
+  "title": "Data Gatekeeper — validation_report.json",
+  "description": "Output of Module 3 (gatekeeper validate, the pipeline's validate step with anomalies, POST /validate). Report version 1.0: contract always, drift when a reference is given, anomalies when asked.",
+  "type": "object",
+  "required": ["report_version", "generated_at", "dataset", "status", "gates", "contract",
+               "drift", "anomalies"],
+  "additionalProperties": false,
+  "properties": {
+    "report_version": {"type": "string", "pattern": "^\\d+\\.\\d+$"},
+    "generated_at": {"type": "string", "format": "date-time"},
+    "dataset": {
+      "type": "object",
+      "required": ["name", "rows", "columns"],
+      "additionalProperties": false,
+      "properties": {
+        "name": {"type": "string"},
+        "rows": {"type": "integer", "minimum": 0},
+        "columns": {"type": "integer", "minimum": 0}
+      }
+    },
+    "status": {"enum": ["pass", "fail"]},
+    "gates": {
+      "type": "object",
+      "required": ["contract", "anomalies"],
+      "additionalProperties": false,
+      "properties": {
+        "contract": {"enum": ["pass", "fail"]},
+        "anomalies": {
+          "oneOf": [
+            {"type": "null"},
+            {
+              "type": "object",
+              "required": ["method", "flagged_share", "limit", "status"],
+              "additionalProperties": false,
+              "properties": {
+                "method": {"$ref": "#/$defs/method"},
+                "flagged_share": {"$ref": "#/$defs/share"},
+                "limit": {"oneOf": [{"type": "null"}, {"$ref": "#/$defs/share"}]},
+                "status": {"enum": ["pass", "fail"]}
+              }
+            }
+          ]
+        }
+      }
+    },
+    "contract": {
+      "type": "object",
+      "required": ["dataset", "rows", "columns", "status", "counts", "column_set",
+                   "pii_columns", "results"],
+      "properties": {
+        "dataset": {"type": "string"},
+        "rows": {"type": "integer", "minimum": 0},
+        "columns": {"type": "integer", "minimum": 0},
+        "status": {"enum": ["pass", "fail"]},
+        "contract": {"type": "string"},
+        "counts": {
+          "type": "object",
+          "required": ["rules", "passed", "failed_error", "failed_warn", "skipped"],
+          "additionalProperties": {"type": "integer", "minimum": 0}
+        },
+        "column_set": {
+          "type": "object",
+          "required": ["missing", "extra"],
+          "properties": {
+            "missing": {"type": "array", "items": {"type": "string"}},
+            "extra": {"type": "array", "items": {"type": "string"}}
+          }
+        },
+        "pii_columns": {"type": "array", "items": {"type": "string"}},
+        "results": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["rule", "column", "severity", "status", "observed", "expected",
+                         "failing_rows"],
+            "additionalProperties": false,
+            "properties": {
+              "rule": {"type": "string"},
+              "column": {"type": ["string", "null"]},
+              "severity": {"enum": ["error", "warn"]},
+              "status": {"enum": ["pass", "fail", "warn", "skipped"]},
+              "observed": {"type": "string"},
+              "expected": {"type": "string"},
+              "failing_rows": {"type": "integer", "minimum": 0}
+            }
+          }
+        }
+      }
+    },
+    "drift": {
+      "oneOf": [
+        {"type": "null"},
+        {
+          "type": "object",
+          "required": ["reference", "current", "thresholds", "status", "counts",
+                       "major_columns", "pii_columns", "columns"],
+          "properties": {
+            "status": {"enum": ["stable", "moderate", "major"]},
+            "major_columns": {"type": "array", "items": {"type": "string"}},
+            "pii_columns": {"type": "array", "items": {"type": "string"}},
+            "counts": {
+              "type": "object",
+              "required": ["stable", "moderate", "major", "skipped"],
+              "additionalProperties": {"type": "integer", "minimum": 0}
+            },
+            "columns": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "required": ["column", "pii", "psi", "status"],
+                "properties": {
+                  "column": {"type": "string"},
+                  "pii": {"type": "boolean"},
+                  "psi": {"type": ["number", "null"], "minimum": 0},
+                  "status": {"enum": ["stable", "moderate", "major", "skipped"]}
+                }
+              }
+            }
+          }
+        }
+      ]
+    },
+    "anomalies": {
+      "oneOf": [
+        {"type": "null"},
+        {
+          "type": "object",
+          "required": ["rows", "fitted_on", "features", "excluded", "contamination", "settings",
+                       "prepare_seconds", "methods"],
+          "additionalProperties": false,
+          "properties": {
+            "rows": {"type": "integer", "minimum": 0},
+            "fitted_on": {"enum": ["reference", "this file"]},
+            "features": {"type": "array", "items": {"type": "string"}, "minItems": 1},
+            "excluded": {"type": "object", "additionalProperties": {"type": "string"}},
+            "contamination": {"type": "number", "exclusiveMinimum": 0, "exclusiveMaximum": 0.5},
+            "settings": {"type": "object"},
+            "prepare_seconds": {"type": "number", "minimum": 0},
+            "methods": {
+              "type": "object",
+              "minProperties": 1,
+              "propertyNames": {"$ref": "#/$defs/method"},
+              "additionalProperties": {
+                "type": "object",
+                "required": ["seconds", "flagged", "flagged_share", "top"],
+                "additionalProperties": false,
+                "properties": {
+                  "seconds": {"type": "number", "minimum": 0},
+                  "flagged": {"type": "integer", "minimum": 0},
+                  "flagged_share": {"$ref": "#/$defs/share"},
+                  "top": {"type": "array", "items": {"$ref": "#/$defs/anomaly_row"}}
+                }
+              }
+            }
+          }
+        }
+      ]
+    }
+  },
+  "$defs": {
+    "method": {"enum": ["iforest", "zscore", "iqr"]},
+    "share": {"type": "number", "minimum": 0, "maximum": 1},
+    "anomaly_row": {
+      "type": "object",
+      "required": ["rank", "row", "score", "reasons"],
+      "additionalProperties": false,
+      "properties": {
+        "rank": {"type": "integer", "minimum": 1},
+        "row": {"type": "integer", "minimum": 0, "description": "position in the file, never an ID"},
+        "score": {"type": "number"},
+        "reasons": {
+          "type": "array",
+          "maxItems": 3,
+          "items": {
+            "type": "object",
+            "required": ["column", "value", "median", "robust_z", "contribution"],
+            "additionalProperties": false,
+            "properties": {
+              "column": {"type": "string"},
+              "value": {"type": ["number", "null"]},
+              "median": {"type": ["number", "null"]},
+              "robust_z": {"type": ["number", "null"], "minimum": 0},
+              "contribution": {"type": "number"}
+            }
+          }
+        }
+      }
+    }
+  }
+}
