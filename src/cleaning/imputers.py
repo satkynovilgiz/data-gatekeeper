@@ -269,6 +269,11 @@ class FoldImputer:
         columns = list(dict.fromkeys([*targets, *(self.features or [])]))
         self.columns_ = [c for c in columns if c in X.columns and X[c].notna().any()]
         self.encoding_ = encode(X, self.columns_, drop_first=(self.method == "iterative"))
+        # for the fallback: the train range of every numeric input, and the median / mode
+        self.input_ranges_ = {c: (float(X[c].astype(float).min()), float(X[c].astype(float).max()))
+                              for c in self.columns_ if c in self.encoding_.scale}
+        self.fallback_values_ = {t: _fill_value(X[t]) for t in targets}
+        self.fallbacks_ = 0
         with warnings.catch_warnings(), np.errstate(divide="ignore", over="ignore",
                                                     invalid="ignore"):
             warnings.simplefilter("ignore", ConvergenceWarning)
@@ -293,11 +298,24 @@ class FoldImputer:
                                                     invalid="ignore"):
             warnings.simplefilter("ignore", ConvergenceWarning)
             filled = self.model_.transform(enc.X)
+        # Fallback: a row whose known inputs are outside the train range would make the
+        # ML model extrapolate from them (Sprint 8: 72% of fills ended on the clip edge).
+        # Its gaps get the median / mode instead; fallbacks_ counts those cells.
+        odd = np.zeros(len(X), dtype=bool)
+        for c, (lo, hi) in self.input_ranges_.items():
+            v = pd.to_numeric(X[c], errors="coerce").to_numpy(dtype=float)
+            with np.errstate(invalid="ignore"):
+                odd |= (v < lo) | (v > hi)
+        self.fallbacks_ = 0
         for t in self.targets_:
             gaps = out[t].isna().to_numpy()
             if not gaps.any():
                 continue
-            values = decode(self.encoding_, filled, t)
+            values = decode(self.encoding_, filled, t).astype(object)
+            use_fallback = gaps & odd
+            if use_fallback.any():
+                values[use_fallback] = self.fallback_values_[t]
+                self.fallbacks_ += int(use_fallback.sum())
             if t in self.ranges_:
                 lo, hi, whole = self.ranges_[t]
                 values = np.clip(values.astype(float), lo, hi)
