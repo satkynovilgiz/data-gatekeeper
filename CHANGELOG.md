@@ -3,6 +3,36 @@
 All notable changes to Data Gatekeeper. Format based on [Keep a Changelog](https://keepachangelog.com/);
 versions follow the `report_version` of `profiling_report.json`.
 
+## [1.8] — 2026-11-25 — Sprint 9: Module 3 complete (sentinel fix, anomalies, one report)
+New files: `reports/<dataset>_validation_report.json` (schema `docs/validation_report.schema.json`),
+`reports/<dataset>_anomalies.json`. `<dataset>_contract.json` is still written.
+
+### Fixed
+- **Unseen sentinels on new rows** (found by the Sprint 8 robustness test). New cleaning step 8b
+  `out_of_range_to_missing` (only on rows cleaned with what the train rows taught, `learn_from_train`): values
+  outside the train or contract range (`contract_ranges`) and common sentinels (999, 9999, −1, −999) that the
+  train column never had become NaN before imputation, logged per column. `FoldImputer` falls back to median /
+  mode for rows whose inputs are still out of range (`fallbacks_`). Single-file cleaning is unchanged.
+  HGB, all corruption kinds at 20%: ROC-AUC 0.6368 → 0.7508 (raw baseline 0.6906).
+
+### Added
+- **Anomaly detection** (`src/validation/anomaly.py`): robust z (1.4826 × MAD), IQR distance, Isolation Forest
+  `score_samples`; top-k explanations (3 columns with value, median, robust z; leave-one-column-out for the forest).
+  Never uses the label, IDs or PII; rows are reported by position.
+- `src/cleaning/outliers.py`: `robust_scale`, `fill_for_forest`, `isolation_forest_model` (shared; `is_anomaly`
+  flags unchanged).
+- Planted-anomaly demo + evaluation (`src/validation/anomaly_inject.py`, `scripts/make_anomaly_demo.py`,
+  `scripts/evaluate_anomalies.py`).
+- **One validation report** (`src/validation/report.py`): `gatekeeper validate --reference --anomalies
+  --fail-on-anomaly-share`, `gatekeeper anomalies`, `gatekeeper impact --variants`.
+- Pipeline step `anomalies` (after quality, before drift; gate only with `fail_on_share`).
+- API: `POST /validate`, `POST /drift`, `POST /anomalies` (Sprint 6 upload limits; contract ≤ 256 KB).
+- `docs/module3_presentation.md`, `docs/sprint-09.md`. Tests 351 → 389.
+
+### Known gap
+- Sentinels are judged by "ever seen in train": `duration` has two real 999s, so injected 999s pass there
+  (fold 0, sentinels 20%: 0.8529, or 0.9166 if they were missing). Planned for Sprint 10.
+
 ## [1.7] — 2026-11-25 — Sprint 8: downstream impact + one-command pipeline
 New files: `reports/<name>_impact.json/.md`, `reports/<name>_robustness.png`,
 `reports/run_<UTC time>/summary.json/.md`.

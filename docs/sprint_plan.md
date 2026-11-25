@@ -3,8 +3,8 @@
 ```
 Sprints 1–3   Module 1  Profile     -> profiling_report.json
 Sprints 4–6   Module 2  Clean       -> cleaned_data.csv + cleaning_log.json
-Sprints 7–9   Module 3  Validate    -> validation_report.json (+ anomaly detection)
-Sprints 10–12 Module 4  Automate    -> one CLI pipeline, YAML config, Docker, CI, demo
+Sprints 7–9   Module 3  Validate    -> validation_report.json (contract + drift + anomalies), impact
+Sprints 10–12 Module 4  Finish      -> sentinel-by-frequency, HTML report, POST /run, final demo
 ```
 
 Status: ✅ done · 🔄 in progress · ⏳ planned
@@ -99,7 +99,7 @@ fitted on 32,940 train rows only; 9/9 fake PII columns found, 0 in Bank; 219 tes
 
 ---
 
-## Module 3 — Validate + anomaly detection
+## Module 3 — Validate + anomaly detection ✅ (complete, Sprint 9)
 
 ### Sprint 7 ✅ — Data contracts + drift gate
 - ✅ YAML data contracts: dtype, required, nullable / max_missing_pct, allowed values, min / max, regex,
@@ -123,43 +123,45 @@ with major drift on exactly the 3 changed columns; 297 tests. See `docs/sprint-0
 missing / malformed values, but unrecognised `999` sentinels hurt with the iterative imputer; 351 tests.
 See `docs/sprint-08.md`.
 
-### Sprint 9 🔄 — Finish Module 3: sentinel fix, anomalies, one validation report
-(Schema checks and drift were already done in Sprint 7, so this sprint does the rest of Module 3.)
-- 🔄 **Sentinel fix** (found by the Sprint 8 robustness test): on new rows, values outside the train
-  (or contract) range and unseen common sentinels (999, 9999, -1, -999) become missing *before*
-  imputation; the imputer falls back to median / mode when its inputs are still out of range.
-  Re-run the Sprint 8 robustness study and compare before / after.
-- 🔄 **Anomaly detection** (`src/validation/anomaly.py`, reusing `src/cleaning/outliers.py`):
-  robust z (median / MAD), IQR, Isolation Forest scores; top-k explanations (leave-one-column-out
-  for the forest); honest evaluation on 1% injected anomalies of 3 kinds, settings fixed in advance.
-- 🔄 **One Module 3 report**: `gatekeeper anomalies`, `validate --reference --anomalies` →
-  `validation_report.json` (+ JSON Schema); an `anomalies` pipeline step; API `/validate`, `/drift`,
-  `/anomalies`.
-- 🔄 **Wrap-up**: Module 3 presentation, Sprint 9 report, plan for Module 4.
+### Sprint 9 ✅ — Finish Module 3: sentinel fix, anomalies, one validation report
+(Schema checks and drift were already done in Sprint 7, so this sprint did the rest of Module 3.)
+- ✅ **Sentinel fix**: step 8b `out_of_range_to_missing` on new rows (train / contract range + unseen
+  common sentinels) and a median / mode fallback in `FoldImputer`; robustness study re-run before / after
+- ✅ **Anomaly detection** (`src/validation/anomaly.py`, reusing `src/cleaning/outliers.py`): robust z, IQR,
+  Isolation Forest, top-k explanations (leave-one-column-out); evaluation on 1% planted anomalies of
+  3 kinds with settings committed before the first run
+- ✅ **One report**: `validation_report.json` + JSON Schema, `gatekeeper anomalies`,
+  `validate --reference --anomalies`, pipeline step `anomalies`, API `/validate /drift /anomalies`
+- ✅ **Wrap-up**: `docs/module3_presentation.md`, `docs/sprint-09.md`
+- ➡️ Moved to Sprint 10: sentinel rule by frequency (the fix lets `duration = 999` through because
+  the train rows contain two real 999s); categories in the forest
 
-**Deliverable:** Module 3 complete: new data gets a contract pass/fail, drift, an explained anomaly
-list, and the sentinel weakness is fixed and measured.
+**Result:** HGB with all corruption kinds at 20%: 0.6368 → 0.7508 (A: 0.6906), clip-edge fills 72–74% → 0–4.5%;
+anomalies: forest ROC-AUC 0.84 overall, but precision@k ≤ 0.21 for every method on real data; 389 tests.
+See `docs/sprint-09.md` and `docs/module3_presentation.md`.
 
 ---
 
-## Module 4 — Automate
+## Module 4 — Finish (what is really left)
+The one-command pipeline, YAML config, Docker and CI were pulled forward into Sprints 7–8, so Module 4 is about
+closing the known gaps and presenting the system.
 
-### Sprint 10 ⏳ — One pipeline
-- `pipeline.py --input ... --output ...` runs Profile → Clean → Validate
-- YAML config file for thresholds and cleaning options
-- Logging (Python `logging`) to console + file
+### Sprint 10 ⏳ — Close the known gaps
+- Sentinel rule by frequency (a code's share in new rows vs. its train share), then re-run the robustness study
+- Categories in the anomaly forest (frequency / one-hot encoding); a mixture-aware z for bimodal columns
+- The impact study on a second, messier dataset (e.g. the HR sample scaled up, or another public dataset)
 
-**Deliverable:** one command runs the whole system.
+**Deliverable:** the Sprint 9 limitations fixed or measured on a second dataset.
 
-### Sprint 11 ⏳ — Docker + CI
-- `Dockerfile` (CLI + API)
-- GitHub Actions: run `pytest` on every push / pull request
-- API endpoint for the full pipeline
+### Sprint 11 ⏳ — Reports people can read + full API
+- One-page HTML report from `validation_report.json` + `summary.json` (moved here from Sprint 3)
+- `POST /run`: the whole pipeline over HTTP; Python `logging` to console + file for `gatekeeper run`
+- Faster iterative imputation on big files (carried over since Sprint 6)
 
-**Deliverable:** `docker run data-gatekeeper --input data.csv` works; CI badge is green.
+**Deliverable:** a non-technical reader can open one HTML page per run.
 
 ### Sprint 12 ⏳ — Final demo
-- End-to-end demo on the real dataset
+- End-to-end demo on the real dataset (Docker image, one command)
 - Final README, architecture diagram, docs check
 - Final presentation + recorded demo
 
