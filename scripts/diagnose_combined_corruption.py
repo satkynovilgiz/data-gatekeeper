@@ -1,0 +1,58 @@
+"""Why does B (iterative imputer) lose to A under ALL corruption kinds? (Sprint 8 finding)
+
+    python scripts/diagnose_combined_corruption.py      # needs data/raw/bank_marketing.csv
+
+Fold 0 of the impact CV, HistGradientBoosting, 20% corruption with the same seed scheme
+as `gatekeeper impact`. Scores A / B / C with and without the sentinel injector, and shows
+how many of B's filled values sit on the clip edge (train min / max).
+"""
+import sys
+import warnings
+from pathlib import Path
+
+import numpy as np
+from sklearn.model_selection import StratifiedKFold
+
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT))
+
+from src.impact import impact as imp  # noqa: E402
+from src.impact.corruption import KINDS, corrupt  # noqa: E402
+from src.profiling.profiler import read_csv_raw  # noqa: E402
+
+LEVEL, LEVEL_INDEX, FOLD = 0.20, 3, 0
+
+
+def main() -> None:
+    """Print the three comparisons and the clip-edge shares."""
+    warnings.simplefilter("ignore")
+    np.seterr(all="ignore")
+    df = read_csv_raw(ROOT / "data/raw/bank_marketing.csv")
+    y = (df["y"] == "yes").astype(int).to_numpy()
+    X = df.drop(columns="y")
+    tr, te = list(StratifiedKFold(5, shuffle=True, random_state=imp.SEED).split(X, y))[FOLD]
+    fm, _ = imp._fit_fold(X.iloc[tr], y[tr], ("hgb",), ("A", "B", "C"))
+    test = X.iloc[te].reset_index(drop=True).assign(__label__=y[te])
+    numeric = fm.raw["hgb"].named_steps["prep"].numeric_
+    seed = imp.SEED + 1000 * FOLD + 10 * LEVEL_INDEX
+    for kinds in (KINDS, ("missing", "numbers_as_text", "duplicates"), ("missing", "sentinels")):
+        dirty, _ = corrupt(test, LEVEL, seed, numeric, list(X.columns), kinds)
+        yd = dirty.pop("__label__").to_numpy().astype(int)
+        auc = {v: round(imp.score(yd, imp._predict(fm, v, "hgb", dirty))["roc_auc"], 4)
+               for v in "ABC"}
+        print(f"{' + '.join(kinds):45} ROC-AUC {auc}")
+    dirty, _ = corrupt(test, LEVEL, seed, numeric, list(X.columns), KINDS)
+    dirty.pop("__label__")
+    cleaned = fm.cleaner.transform(dirty)
+    filled = fm.imputers["B"].transform(cleaned)
+    for c in ("age", "euribor3m", "nr.employed", "emp.var.rate"):
+        gaps = cleaned[c].isna()
+        lo, hi, _ = fm.imputers["B"].ranges_[c]
+        v = filled.loc[gaps, c].astype(float)
+        edge = float(((v <= lo) | (v >= hi)).mean())
+        print(f"{c:13} gaps {int(gaps.sum()):5}  filled on the clip edge {edge:.1%}  "
+              f"999 left as a number {int((cleaned[c] == 999).sum())}")
+
+
+if __name__ == "__main__":
+    main()
