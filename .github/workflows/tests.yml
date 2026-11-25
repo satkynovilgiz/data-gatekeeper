@@ -31,3 +31,54 @@ jobs:
           # a throwaway salt for the PII hashing tests (real salts never go in the repo)
           GATEKEEPER_PII_SALT: ci-only-not-secret
         run: pytest -q
+
+  # Sprint 7: the data contract gate, the way a data pipeline would use it in CI.
+  contract-gate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - name: Install requirements
+        run: pip install -r requirements.txt
+      - name: A good file passes the contract (exit 0)
+        run: python gatekeeper.py validate tests/fixtures/orders_ok.csv --contract contracts/example.yaml
+      - name: A bad file fails the contract (exit 1, not 0 or 2)
+        run: |
+          code=0
+          python gatekeeper.py validate tests/fixtures/orders_bad.csv --contract contracts/example.yaml || code=$?
+          echo "exit code: $code"
+          test "$code" -eq 1
+      - name: A broken contract is a bad input (exit 2)
+        run: |
+          printf 'columns:\n  - name: a\n    dtype: int\n' > broken.yaml
+          code=0
+          python gatekeeper.py validate tests/fixtures/orders_ok.csv --contract broken.yaml || code=$?
+          echo "exit code: $code"
+          test "$code" -eq 2
+      - name: No drift between a file and itself (exit 0)
+        run: python gatekeeper.py drift tests/fixtures/orders_ok.csv tests/fixtures/orders_ok.csv
+      - name: Keep the JSON reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: contract-reports
+          path: reports/
+
+  # Sprint 7: the same gate inside the Docker image.
+  docker:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build the image
+        run: docker build -t data-gatekeeper .
+      - name: validate in the container (good file -> 0, bad file -> 1)
+        run: |
+          run() { docker run --rm --user "$(id -u):$(id -g)" -v "$PWD:/work" -w /work data-gatekeeper "$@"; }
+          run validate tests/fixtures/orders_ok.csv --contract contracts/example.yaml
+          code=0
+          run validate tests/fixtures/orders_bad.csv --contract contracts/example.yaml || code=$?
+          echo "exit code: $code"
+          test "$code" -eq 1
