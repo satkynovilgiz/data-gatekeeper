@@ -190,8 +190,11 @@ def cmd_impact(args: argparse.Namespace) -> int:
     from src.impact.report import comparison_table, results_table, write_impact_report
 
     try:
+        variants = tuple(v.strip().upper() for v in args.variants.split(",") if v.strip())
+        if not variants or set(variants) - {"A", "B", "C"}:
+            raise InputError("--variants: use a comma list of A, B, C")
         report = run_impact(df, args.target, positive=args.positive, folds=args.folds,
-                            robustness=not args.no_robustness,
+                            robustness=not args.no_robustness, variants=variants,
                             levels=parse_levels(args.levels), dataset=name)
     except ValueError as e:
         raise InputError(str(e)) from None
@@ -263,6 +266,8 @@ def build_parser() -> argparse.ArgumentParser:
     imp.add_argument("--levels", default=DEFAULT_LEVELS,
                      help=f"corruption levels for robustness (default {DEFAULT_LEVELS})")
     imp.add_argument("--sample", type=int, help="use N stratified rows (quick runs)")
+    imp.add_argument("--variants", default="A,B,C",
+                     help="which preparations to compare (default A,B,C; robustness uses A,B)")
     imp.add_argument("--reports-dir", default="reports", help="where the reports go")
     imp.set_defaults(func=cmd_impact)
 
