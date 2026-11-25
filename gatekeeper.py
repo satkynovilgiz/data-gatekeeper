@@ -188,6 +188,11 @@ def main(argv: list[str] | None = None) -> int:
     except (ContractError, InputError) as e:
         print(f"error: {e}", file=sys.stderr)
         return EXIT_BAD_INPUT
+    except OSError as e:
+        # e.g. reports/ not writable inside a container: not a data failure, so not exit 1
+        print(f"error: cannot read or write a file ({e.strerror}: {e.filename})",
+              file=sys.stderr)
+        return EXIT_BAD_INPUT
 
 
 if __name__ == "__main__":

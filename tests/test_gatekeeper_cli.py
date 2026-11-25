@@ -107,3 +107,15 @@ def test_drift_output_hides_pii(tmp_path):
     text = r.stdout + (tmp_path / "orders_ok_drift.json").read_text()
     for raw in ("aida@example.com", "bek@example.com", "hasan@example.com"):
         assert raw not in text
+
+
+def test_unwritable_reports_dir_exits_2_not_1(tmp_path):
+    locked = tmp_path / "locked"
+    locked.mkdir()
+    locked.chmod(0o555)
+    try:
+        r = gk("validate", FIXTURES / "orders_ok.csv", "--contract", EXAMPLE,
+               "--reports-dir", locked / "reports")
+    finally:
+        locked.chmod(0o755)
+    assert r.returncode == 2 and "cannot read or write" in r.stderr
