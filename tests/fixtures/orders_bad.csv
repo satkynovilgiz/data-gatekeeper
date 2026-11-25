@@ -1,0 +1,7 @@
+order_id,email,country,amount,paid,order_date
+1,aida@example.com,KG,120.50,yes,2026-11-01
+2,bek@example.com,RU,35.00,no,2026-11-01
+2,carlos.at.example.com,UZ,-5.00,yes,2026-11-02
+4,dana@example.com,KG,1500,maybe,not a date
+5,erlan@example.com,KG,410.25,no,2026-11-03
+6,farida@example.com,KZ,77.70,yes,2026-11-04

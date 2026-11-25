@@ -1,0 +1,40 @@
+# Example data contract: every rule type once. Used by the tests and the CI contract job
+# (tests/fixtures/orders_ok.csv passes it, tests/fixtures/orders_bad.csv fails it).
+# Rule forms:  min: 0   or   max: {value: 1000, severity: warn}
+contract_version: 1
+dataset: orders
+table:
+  min_rows: 5
+  max_duplicate_rows_pct: {value: 0, severity: warn}
+  extra_columns: warn            # error | warn | ignore
+columns:
+  - name: order_id
+    dtype: integer
+    nullable: false
+    unique: true
+  - name: email
+    dtype: string
+    pii: true                    # values are masked in every report
+    max_missing_pct: 20
+    regex: {value: '[^@\s]+@[^@\s]+\.[a-z]+', severity: warn}
+  - name: country
+    dtype: string
+    nullable: false
+    allowed_values: [KG, KZ, UZ]
+  - name: amount
+    dtype: number
+    nullable: false
+    min: 0
+    max: {value: 1000, severity: warn}
+  - name: paid
+    dtype: boolean
+  - name: order_date
+    dtype: date
+    nullable: false
+  - name: coupon
+    dtype: string
+    required: false              # may be absent from the file
+drift:
+  psi_moderate: 0.1
+  psi_major: 0.25
+  bins: 5
