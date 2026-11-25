@@ -68,8 +68,8 @@ columns:
   nullable: false
   allowed_values: [failure, nonexistent, success]
 - {name: emp.var.rate, dtype: number, required: true, nullable: false, min: -3.88, max: 1.88}
-- {name: cons.price.idx, dtype: number, required: true, nullable: false, min: 91.9443, max: 95.0236}
-- {name: cons.conf.idx, dtype: number, required: true, nullable: false, min: -53.19, max: -24.5099}
+- {name: cons.price.idx, dtype: number, required: true, nullable: false, min: 91.9444, max: 95.0236}
+- {name: cons.conf.idx, dtype: number, required: true, nullable: false, min: -53.19, max: -24.51}
 - {name: euribor3m, dtype: number, required: true, nullable: false, min: 0.1929, max: 5.4861}
 - {name: nr.employed, dtype: number, required: true, nullable: false, min: 4937.15, max: 5254.55}
 - name: y
