@@ -275,8 +275,9 @@ def step_impact(ctx: Context, opts: dict) -> dict:
     headline = {}
     for m, by_metric in report["comparisons"].get("B-A", {}).items():
         c = by_metric["roc_auc"]
-        headline[m] = {"roc_auc_B_minus_A": round(c["mean_diff"], 4),
-                       "ci95": [round(x, 4) for x in c["ci95"]], "verdict": c["verdict"]}
+        lo, hi = c["ci95"]
+        headline[f"{m} ROC-AUC B-A"] = (f"{c['mean_diff']:+.4f} [{lo:+.4f}, {hi:+.4f}] "
+                                        f"{c['verdict']}")
     return {"status": "passed", "files": list(files.values()), "result": headline}
 
 
