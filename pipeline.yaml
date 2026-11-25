@@ -1,6 +1,6 @@
 # One-command pipeline for the Bank Marketing data:  python gatekeeper.py run --config pipeline.yaml
 # Steps run in this order (any subset): profile -> validate -> clean -> mask_pii -> quality
-# -> drift -> impact. The contract gate stops the run on an error-level failure (exit 1).
+# -> anomalies -> drift -> impact. The contract gate stops the run on an error-level failure (exit 1).
 # Paths are relative to where you run the command. Results: reports/run_<UTC time>/.
 # Before the first run:  python scripts/download_bank_marketing.py
 #                        python scripts/make_drift_demo.py     (the drift reference)
@@ -15,6 +15,10 @@ steps:
       imputer: iterative          # chosen in Sprint 5 (median is ~4x faster)
   - mask_pii                      # Bank has no personal data: reports 0 columns
   - quality
+  - anomalies:                    # Sprint 9: explain the most unusual rows
+      exclude: [y]                # never use the label
+      top: 10
+      # fail_on_share: 0.05       # uncomment: more than 5% flagged stops the run (exit 1)
   - drift:
       reference: data/demo/bank_reference.csv
       contract: contracts/bank_marketing.yaml   # thresholds + column types

@@ -60,6 +60,12 @@ jobs:
           test "$code" -eq 2
       - name: No drift between a file and itself (exit 0)
         run: python gatekeeper.py drift tests/fixtures/orders_ok.csv tests/fixtures/orders_ok.csv
+      # Sprint 9: one validation report (contract + drift + anomalies); anomalies alone never fail
+      - name: Combined validation report on the good fixture (exit 0)
+        run: |
+          python gatekeeper.py validate tests/fixtures/orders_ok.csv --contract contracts/example.yaml \
+            --reference tests/fixtures/orders_ok.csv --anomalies --exclude paid
+          test -f reports/orders_ok_validation_report.json
       # Sprint 8: the whole pipeline on the fixture; impact (minutes on real data) is skipped
       - name: One-command pipeline passes on the good fixture (exit 0)
         run: python gatekeeper.py run --config tests/fixtures/pipeline_ci.yaml --skip impact

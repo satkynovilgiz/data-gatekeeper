@@ -54,6 +54,7 @@ from src.cleaning.cleaner import (
     CleaningRun,
     _strategy,
     feature_columns,
+    learn_from_train,
 )
 from src.cleaning.imputers import FoldImputer
 from src.cleaning.schema import infer_schema
@@ -128,18 +129,29 @@ class RawPrep:
 
 
 class RowCleaner:
-    """Variants B/C, part 1: Module 1 profile + schema learned on train, steps 1-8 applied.
+    """Variants B/C, part 1: Module 1 profile + schema learned on train, steps 1-8b applied.
 
     fit() also works out, exactly as the cleaner's impute step does, which columns get
-    imputed (impute_targets_) and which ones the imputer may learn from (impute_features_).
+    imputed (impute_targets_) and which ones the imputer may learn from (impute_features_),
+    and learns the train range + seen sentinels of every numeric column, so transform()
+    turns values the train rows never had into NaN (step 8b, out_of_range_to_missing).
+    ranges: {column: [min, max]} that replace the learned range (e.g. from a contract).
+    value_checks: False skips the steps that remove values for being impossible or out of
+    range (impossible_value_to_nan, out_of_range_to_missing): anomaly detection wants to SEE
+    an age of 137, not a gap.
     """
 
-    def __init__(self, config: dict | None = None) -> None:
+    VALUE_CHECKS = ("impossible_value_to_nan", "out_of_range_to_missing")
+
+    def __init__(self, config: dict | None = None,
+                 ranges: dict[str, list[float]] | None = None, value_checks: bool = True) -> None:
         self.config = config
+        self.ranges = ranges
+        self.value_checks = value_checks
 
     def get_params(self, deep: bool = True) -> dict:
         """scikit-learn: the constructor arguments."""
-        return {"config": self.config}
+        return {"config": self.config, "ranges": self.ranges, "value_checks": self.value_checks}
 
     def set_params(self, **params: object) -> RowCleaner:
         """scikit-learn: change constructor arguments."""
@@ -151,24 +163,37 @@ class RowCleaner:
         run = CleaningRun(df=X.copy(), schema=self.schema_, config=self.config_,
                           suggestions=self.suggestions_)
         for step in ROW_STEPS:
-            step(run)
+            if self.value_checks or step.__name__ not in self.VALUE_CHECKS:
+                step(run)
         return run
 
     def fit(self, X: pd.DataFrame, y: object = None) -> RowCleaner:
         """Profile the train rows and learn the schema (no label is used)."""
-        self.config_ = {**DEFAULT_CONFIG, **(self.config or {})}
+        self.config_ = {**DEFAULT_CONFIG, **(self.config or {}), "learned": None}
         report = profile_dataset(X, dataset_name="train_fold")
         self.schema_ = infer_schema(X, report)
         self.suggestions_ = report.get("cleaning_suggestions", [])
-        run = self._run(X)
+        run = self._run(X)                       # learned=None: step 8b does nothing here
         self.columns_ = list(run.df.columns)
         self.impute_features_ = feature_columns(run)
         self.impute_targets_ = [c for c in run.df.columns if _strategy(run, c) != "none"]
+        self.config_["learned"] = learn_from_train(
+            run.df, run.cols("numeric"), self.config_["common_sentinels"], self.ranges)
+        self.out_of_range_ = {}
         return self
 
     def transform(self, X: pd.DataFrame) -> pd.DataFrame:
-        """Clean rows with the train schema; same columns as on train."""
-        df = self._run(X).df.reindex(columns=self.columns_)
+        """Clean rows with the train schema; same columns as on train.
+
+        out_of_range_ = {column: cells set to NaN by step 8b} for this call.
+        """
+        run = self._run(X)
+        self.out_of_range_ = {}
+        for st in run.steps:
+            if st["step"] == "out_of_range_to_missing":
+                self.out_of_range_[st["column"]] = (self.out_of_range_.get(st["column"], 0)
+                                                    + st["cells_changed"])
+        df = run.df.reindex(columns=self.columns_)
         for c in df.columns:              # numbers as float (Int64 / object mixes upset sklearn)
             if c in self.schema_["columns"] and \
                     self.schema_["columns"][c]["expected_type"] == "numeric":
