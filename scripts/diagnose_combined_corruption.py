@@ -5,6 +5,8 @@
 Fold 0 of the impact CV, HistGradientBoosting, 20% corruption with the same seed scheme
 as `gatekeeper impact`. Scores A / B / C with and without the sentinel injector, and shows
 how many of B's filled values sit on the clip edge (train min / max).
+Sprint 9: also prints what the sentinel fix did (step 8b out_of_range_to_missing per column,
+and how many cells the imputer filled with its median / mode fallback).
 """
 import sys
 import warnings
@@ -45,6 +47,10 @@ def main() -> None:
     dirty.pop("__label__")
     cleaned = fm.cleaner.transform(dirty)
     filled = fm.imputers["B"].transform(cleaned)
+    moved = getattr(fm.cleaner, "out_of_range_", {})
+    print(f"out_of_range_to_missing: {sum(moved.values())} cells "
+          f"({', '.join(f'{c} {n}' for c, n in sorted(moved.items(), key=lambda x: -x[1])[:6])})")
+    print(f"imputer fallback to median / mode: {getattr(fm.imputers['B'], 'fallbacks_', 0)} cells")
     for c in ("age", "euribor3m", "nr.employed", "emp.var.rate"):
         gaps = cleaned[c].isna()
         lo, hi, _ = fm.imputers["B"].ranges_[c]
