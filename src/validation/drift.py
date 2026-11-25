@@ -88,9 +88,14 @@ def numeric_drift(ref: pd.Series, cur: pd.Series, bins: int = 10,
     r_miss, c_miss = int(r.isna().sum()), int(c.isna().sum())
     if r_miss or c_miss:
         rc, cc = np.append(rc, r_miss), np.append(cc, c_miss)
-    ks = ks_2samp(r_vals, c_vals)
+    # For a tiny KS distance on big samples (cons.conf.idx: D = 0.003, 28k vs 12k rows)
+    # scipy's p-value routine overflows in an intermediate matrix power and warns, while
+    # the p-value it returns (~1.0) is right. Silence that noise; keep None if not finite.
+    with np.errstate(all="ignore"):
+        ks = ks_2samp(r_vals, c_vals)
+    pvalue = float(ks.pvalue) if np.isfinite(ks.pvalue) else None
     out = {"kind": "numeric", "psi": round(psi(rc, cc), 4),
-           "ks_statistic": round(float(ks.statistic), 4), "ks_pvalue": float(ks.pvalue),
+           "ks_statistic": round(float(ks.statistic), 4), "ks_pvalue": pvalue,
            "bins_used": int(len(edges) + 1)}
     if show_bins:
         labels = ([f"< {edges[0]:g}"] if len(edges) else ["all"])
