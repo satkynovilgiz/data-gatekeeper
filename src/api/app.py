@@ -1,4 +1,4 @@
-"""Data Gatekeeper API — profile, clean, transform and mask a CSV over HTTP (Sprint 6).
+"""Data Gatekeeper API — profile, clean, transform, mask and validate CSVs over HTTP.
 
 Run:   make api          (= uvicorn src.api.app:app --reload)
 Docs:  http://127.0.0.1:8000/docs  (interactive page to try every endpoint)
@@ -9,6 +9,10 @@ Endpoints (upload one CSV as the form field "file"):
     POST /clean       -> cleaning log + quality before/after (JSON), or ?output=csv
     POST /transform   -> transform report (JSON), or ?output=csv (train + test rows)
     POST /mask-pii    -> PII report (JSON), or ?output=csv (the protected data)
+    POST /validate    -> validation report: contract (+ drift with a reference file,
+                         + anomalies with ?anomalies=true)           (Sprint 9)
+    POST /drift       -> drift report of "current" against "reference" (Sprint 9)
+    POST /anomalies   -> unusual rows with explanations (Sprint 9)
 
 Safety rules:
   * .csv only, at most MAX_UPLOAD_MB and MAX_ROWS -> clear 4xx errors otherwise
@@ -25,6 +29,7 @@ import logging
 from typing import Literal, Optional, Union
 
 import pandas as pd
+import yaml
 from fastapi import FastAPI, File, HTTPException, Query, Request, UploadFile
 from fastapi.responses import JSONResponse, Response
 
@@ -33,9 +38,14 @@ from src.privacy.mask import PrivacyError, mask_dataframe
 from src.profiling.profiler import REPORT_VERSION, profile_dataset, sniff_separator
 from src.quality.score import quality_delta, quality_score
 from src.transform.pipeline import TEST_SIZE, transform_dataset
+from src.validation.anomaly import METHODS, detect
+from src.validation.contract import ContractError, parse_contract
+from src.validation.drift import drift_report
+from src.validation.report import parse_methods, validation_report
 
 MAX_UPLOAD_MB = 20
 MAX_ROWS = 200_000
+MAX_CONTRACT_KB = 256        # a contract is a small YAML file
 PREVIEW_ROWS = 5
 FORM_OVERHEAD = 64 * 1024    # multipart headers around the file
 
@@ -43,7 +53,8 @@ log = logging.getLogger("gatekeeper.api")
 
 app = FastAPI(
     title="Data Gatekeeper API",
-    description="Upload a CSV: profile it, clean it, transform it for ML, or mask its PII.",
+    description="Upload a CSV: profile it, clean it, transform it for ML, mask its PII, "
+                "or validate it (contract, drift, anomalies).",
     version=REPORT_VERSION,
 )
 
@@ -204,3 +215,84 @@ def mask_pii(file: UploadFile = File(..., description="CSV file with personal da
     if output == "csv":
         return csv_download(masked, f"masked_{name}")
     return {"dataset": name, "report": report, "preview": preview(masked)}
+
+
+# ------------------------------------------------------------- Sprint 9: Module 3
+def read_contract(file: UploadFile) -> dict:
+    """Check and parse an uploaded contract (.yaml / .yml, small, valid format)."""
+    name = file.filename or "contract.yaml"
+    try:
+        if not name.lower().endswith((".yaml", ".yml")):
+            raise HTTPException(status_code=400, detail="The contract must be a .yaml file")
+        limit = MAX_CONTRACT_KB * 1024
+        data = file.file.read(limit + 1)
+    finally:
+        file.file.close()
+    if len(data) > limit:
+        raise HTTPException(status_code=413, detail=f"Contract is larger than {MAX_CONTRACT_KB} KB")
+    try:
+        return parse_contract(yaml.safe_load(data.decode("utf-8", errors="replace")),
+                              source="contract")
+    except yaml.YAMLError as e:
+        raise HTTPException(status_code=400, detail="The contract is not valid YAML") from e
+    except ContractError as e:                 # names the broken rule, never a data value
+        raise HTTPException(status_code=400, detail=str(e)) from e
+
+
+def read_csv_upload(file: UploadFile) -> tuple[pd.DataFrame, str]:
+    """An uploaded CSV with the Sprint 6 limits, every value as text."""
+    data, name = read_upload(file)
+    return parse_csv(data), name
+
+
+@app.post("/validate")
+def validate(file: UploadFile = File(..., description="CSV file to check"),
+             contract: UploadFile = File(..., description="contract YAML"),
+             reference: Optional[UploadFile] = File(
+                 None, description="optional reference CSV: adds the drift section"),
+             anomalies: bool = Query(False, description="add the anomaly section"),
+             method: str = Query("iforest", description="iforest, zscore, iqr or all"),
+             exclude: list[str] = Query([], description="columns never used, e.g. y"),
+             fail_on_share: Optional[float] = Query(None, ge=0, le=1),
+             ) -> dict:
+    """Contract check (+ drift, + anomalies) -> the validation report (status pass / fail)."""
+    spec = read_contract(contract)
+    df, name = read_csv_upload(file)
+    ref, ref_name = (None, "reference")
+    if reference is not None:
+        ref, ref_name = read_csv_upload(reference)
+    try:
+        return validation_report(df, spec, name, reference=ref, reference_name=ref_name,
+                                 anomalies=anomalies, methods=parse_methods(method),
+                                 exclude=exclude, fail_on_share=fail_on_share)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+
+
+@app.post("/drift")
+def drift(reference: UploadFile = File(..., description="reference CSV (the good data)"),
+          current: UploadFile = File(..., description="new CSV to compare"),
+          contract: Optional[UploadFile] = File(None, description="optional contract YAML "
+                                                "(drift thresholds, column types)"),
+          ) -> dict:
+    """PSI + KS per column of current against reference; PII values never shown."""
+    spec = read_contract(contract) if contract is not None else None
+    ref, ref_name = read_csv_upload(reference)
+    cur, cur_name = read_csv_upload(current)
+    return drift_report(ref, cur, spec, reference_name=ref_name, current_name=cur_name)
+
+
+@app.post("/anomalies")
+def anomalies_endpoint(file: UploadFile = File(..., description="CSV file"),
+                       method: str = Query("all", description=f"{', '.join(METHODS)} or all"),
+                       top: int = Query(10, ge=1, le=100),
+                       contamination: float = Query(0.01, gt=0, lt=0.5),
+                       exclude: list[str] = Query([], description="columns never used, e.g. y"),
+                       ) -> dict:
+    """Score rows (robust z, IQR, Isolation Forest) and explain the top ones."""
+    df, _ = read_csv_upload(file)
+    try:
+        return detect(df, methods=parse_methods(method), top=top, contamination=contamination,
+                      exclude=exclude)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
