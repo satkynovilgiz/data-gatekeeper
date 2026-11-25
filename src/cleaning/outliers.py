@@ -12,6 +12,12 @@ Isolation Forest (whole rows, scikit-learn): "is this ROW unusual?"
     many. A short average path = an anomaly. It looks at all numeric columns together, so
     it also finds odd COMBINATIONS that no single column shows. We mark the most isolated
     ANOMALY_SHARE of rows (1%) in an is_anomaly column; it never changes values.
+
+Robust z (one column, Sprint 9): "how many typical spreads is this value from the middle?"
+    z = |x - median| / (1.4826 x MAD), MAD = median of |x - median|. The factor 1.4826 makes
+    1.4826 x MAD equal the standard deviation for normal data, but unlike mean / std a few
+    extreme values cannot pull the median or the MAD. MAD = 0 (at least half the values are
+    identical) is handled like IQR = 0: the column is not used.
 """
 from __future__ import annotations
 
@@ -49,6 +55,31 @@ def iqr_outliers(s: pd.Series) -> tuple[pd.Series, tuple[float, float] | None]:
     return s.notna() & ((s < lo) | (s > hi)), fences
 
 
+def robust_scale(s: pd.Series) -> float | None:
+    """1.4826 x MAD of a numeric column, or None when MAD = 0 or there are no values."""
+    known = s.dropna().astype(float)
+    if known.empty:
+        return None
+    mad = float((known - known.median()).abs().median())
+    return 1.4826 * mad if mad > 0 else None
+
+
+def fill_for_forest(X: pd.DataFrame, medians: pd.Series | None = None) -> pd.DataFrame:
+    """Numbers for the Isolation Forest: empty cells -> the column median (then 0).
+
+    medians: use these (e.g. learned on a reference) instead of X's own.
+    """
+    X = X.astype(float)
+    return X.fillna(X.median() if medians is None else medians).fillna(0)
+
+
+def isolation_forest_model(X: pd.DataFrame, share: float = ANOMALY_SHARE,
+                           seed: int = SEED) -> IsolationForest:
+    """An Isolation Forest fitted on X (already numeric, no gaps). Trees need no scaling."""
+    model = IsolationForest(n_estimators=100, contamination=share, random_state=seed)
+    return model.fit(X.to_numpy())
+
+
 def isolation_forest_rows(df: pd.DataFrame, columns: list[str],
                           share: float = ANOMALY_SHARE, seed: int = SEED) -> pd.Series:
     """True for the `share` most unusual rows according to an Isolation Forest.
@@ -58,10 +89,9 @@ def isolation_forest_rows(df: pd.DataFrame, columns: list[str],
     """
     if not columns or share <= 0 or len(df) < 10:
         return pd.Series(False, index=df.index)
-    X = df[columns].astype(float)
-    X = X.fillna(X.median()).fillna(0)
-    model = IsolationForest(n_estimators=100, contamination=share, random_state=seed)
-    return pd.Series(model.fit_predict(X.to_numpy()) == -1, index=df.index)
+    X = fill_for_forest(df[columns])
+    model = isolation_forest_model(X, share, seed)
+    return pd.Series(model.predict(X.to_numpy()) == -1, index=df.index)
 
 
 def main_reason(df: pd.DataFrame, columns: list[str], row: int) -> str:
