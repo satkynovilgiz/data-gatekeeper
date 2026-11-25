@@ -17,8 +17,8 @@ Exit codes (for CI):
     drift     0 = no column with major drift, 1 = at least one, 2 = bad input
     contract init: 0 = written, 2 = bad input or the file exists (use --force)
     impact    0 = report written, 2 = bad input
-    run       0 = every step passed, 1 = stopped at a gate (contract error / major drift
-              with gate: true), 2 = bad config or a step crashed
+    run       0 = every step passed, 1 = stopped at a gate (contract error / anomaly share
+              over fail_on_share / major drift with gate: true), 2 = bad config or a step crashed
 
 Reports are written to reports/ (change with --reports-dir):
     reports/<dataset>_validation_report.json (contract + drift + anomalies, Sprint 9;

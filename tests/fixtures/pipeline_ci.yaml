@@ -12,6 +12,9 @@ steps:
   - mask_pii:
       actions: {email: mask}
   - quality
+  - anomalies:
+      exclude: [paid]
+      top: 3
   - drift:
       reference: tests/fixtures/orders_ok.csv
       contract: contracts/example.yaml

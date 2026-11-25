@@ -2,7 +2,7 @@
 
 The config lists the steps to run, in this order (any subset, never reordered):
 
-    profile -> validate -> clean -> mask_pii -> quality -> drift -> impact
+    profile -> validate -> clean -> mask_pii -> quality -> anomalies -> drift -> impact
 
     input: data/raw/bank_marketing.csv
     name: bank_marketing              # optional, default: the input file name
@@ -13,15 +13,17 @@ The config lists the steps to run, in this order (any subset, never reordered):
       - clean: {imputer: iterative}   # optional: median, knn, regression, iterative
       - mask_pii                      # optional: {actions: {column: mask|hash|drop|...}}
       - quality
+      - anomalies: {exclude: [y], top: 10}   # optional: method, contamination, fail_on_share
       - drift: {reference: data/demo/bank_reference.csv, gate: false}
       - impact: {target: y, folds: 5, robustness: true}
 
 Every step calls the function the single commands use (profile_dataset, validate_dataframe,
-clean_file, mask_dataframe, quality_score, drift_report, run_impact); nothing is
+clean_file, mask_dataframe, quality_score, detect, drift_report, run_impact); nothing is
 re-implemented here. Paths are relative to the folder you run the command from.
 
-Gates: validate stops the run when an error-level rule fails (exit 1). drift stops it only
-with `gate: true` and a column with major drift (exit 1). A bad config or a step that
+Gates: validate stops the run when an error-level rule fails (exit 1). anomalies stops it
+only with `fail_on_share: X` and more than X of the rows flagged; drift only with
+`gate: true` and a column with major drift (exit 1). A bad config or a step that
 crashes ends the run with exit 2. The summary is written in every case:
 reports/run_<UTC timestamp>/summary.json and summary.md, next to each step's own files.
 """
@@ -43,13 +45,14 @@ from src.profiling.profiler import profile_dataset, read_csv_raw, save_report
 from src.validation.contract import load_contract, validate_dataframe
 from src.validation.drift import drift_report
 
-ORDER = ("profile", "validate", "clean", "mask_pii", "quality", "drift", "impact")
+ORDER = ("profile", "validate", "clean", "mask_pii", "quality", "anomalies", "drift", "impact")
 OPTIONS = {
     "profile": set(),
     "validate": {"contract"},
     "clean": {"imputer"},
     "mask_pii": {"actions"},
     "quality": set(),
+    "anomalies": {"method", "top", "contamination", "exclude", "fail_on_share"},
     "drift": {"reference", "contract", "gate"},
     "impact": {"target", "folds", "robustness", "positive"},
 }
@@ -128,6 +131,18 @@ def _check_options(steps: list[tuple[str, dict]]) -> None:
             if not isinstance(actions, dict) or set(actions.values()) - ACTIONS:
                 raise ConfigError(f"mask_pii.actions: {{column: action}} with action in "
                                   f"{sorted(ACTIONS)}")
+        if name == "anomalies":
+            if o.get("method", "iforest") not in ("iforest", "zscore", "iqr"):
+                raise ConfigError("anomalies.method must be iforest, zscore or iqr")
+            top = o.get("top", 10)
+            if not isinstance(top, int) or isinstance(top, bool) or top < 1:
+                raise ConfigError("anomalies.top must be a whole number >= 1")
+            share = o.get("fail_on_share")
+            if share is not None and (not isinstance(share, (int, float)) or
+                                      isinstance(share, bool) or not 0 <= share <= 1):
+                raise ConfigError("anomalies.fail_on_share must be a number from 0 to 1")
+            if not isinstance(o.get("exclude", []), list):
+                raise ConfigError("anomalies.exclude must be a list of column names")
         if name == "drift" and not isinstance(o.get("gate", False), bool):
             raise ConfigError("drift.gate must be true or false")
         if name == "impact":
@@ -246,6 +261,27 @@ def step_quality(ctx: Context, opts: dict) -> dict:
             "result": result}
 
 
+def step_anomalies(ctx: Context, opts: dict) -> dict:
+    """Sprint 9 anomaly detection on the input; a gate only with fail_on_share."""
+    from src.validation.anomaly import detect
+
+    method = opts.get("method", "iforest")
+    section = detect(ctx.raw, methods=(method,), top=opts.get("top", 10),
+                     contamination=opts.get("contamination", 0.01),
+                     exclude=opts.get("exclude") or [])
+    path = ctx.write(f"{ctx.cfg['name']}_anomalies.json", section)
+    m = section["methods"][method]
+    top = [f"row {t['row']}: " + ", ".join(r["column"] for r in t["reasons"])
+           for t in m["top"][:3]]
+    out = {"files": [path], "result": {"method": method, "flagged": m["flagged"],
+                                       "flagged_share": m["flagged_share"],
+                                       "limit": opts.get("fail_on_share"), "top_rows": top}}
+    limit = opts.get("fail_on_share")
+    if limit is not None and m["flagged_share"] > limit:
+        raise StepStop({**out, "status": "failed"})
+    return {**out, "status": "passed"}
+
+
 def step_drift(ctx: Context, opts: dict) -> dict:
     """Sprint 7 drift of the input against a reference file."""
     contract = load_contract(opts["contract"]) if opts.get("contract") else None
@@ -283,7 +319,8 @@ def step_impact(ctx: Context, opts: dict) -> dict:
 
 STEPS: dict[str, Callable[[Context, dict], dict]] = {
     "profile": step_profile, "validate": step_validate, "clean": step_clean,
-    "mask_pii": step_mask_pii, "quality": step_quality, "drift": step_drift,
+    "mask_pii": step_mask_pii, "quality": step_quality, "anomalies": step_anomalies,
+    "drift": step_drift,
     "impact": step_impact,
 }
 
@@ -351,7 +388,8 @@ def _short(result: dict | None) -> str:
         return ""
     parts = []
     for k, v in result.items():
-        if isinstance(v, (dict, list)) and k not in ("failed_rules", "major_columns"):
+        if isinstance(v, (dict, list)) and k not in ("failed_rules", "major_columns",
+                                                     "top_rows"):
             continue
         if isinstance(v, list):
             v = "; ".join(map(str, v)) or "none"
