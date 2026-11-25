@@ -1,0 +1,80 @@
+# Data contract drafted by `gatekeeper contract init` from bank_reference.csv.
+# It describes what the reference data looked like: edit it to say what
+# new data MUST look like (tighten or loosen ranges, add regexes, set
+# severity: warn on rules that should not fail a run).
+# Rule forms:  min: 18   or   min: {value: 18, severity: warn}
+contract_version: 1
+dataset: bank_reference.csv
+table:
+  min_rows: 2884
+  max_duplicate_rows_pct: {value: 1.0, severity: warn}
+  extra_columns: warn
+columns:
+- {name: age, dtype: integer, required: true, nullable: false, min: 8, max: 107}
+- name: job
+  dtype: string
+  required: true
+  nullable: false
+  allowed_values: [admin., blue-collar, entrepreneur, housemaid, management, retired, self-employed, services,
+    student, technician, unemployed, unknown]
+- name: marital
+  dtype: string
+  required: true
+  nullable: false
+  allowed_values: [divorced, married, single, unknown]
+- name: education
+  dtype: string
+  required: true
+  nullable: false
+  allowed_values: [basic.4y, basic.6y, basic.9y, high.school, illiterate, professional.course, university.degree,
+    unknown]
+- name: default
+  dtype: string
+  required: true
+  nullable: false
+  allowed_values: ['no', unknown, 'yes']
+- name: housing
+  dtype: string
+  required: true
+  nullable: false
+  allowed_values: ['no', unknown, 'yes']
+- name: loan
+  dtype: string
+  required: true
+  nullable: false
+  allowed_values: ['no', unknown, 'yes']
+- name: contact
+  dtype: string
+  required: true
+  nullable: false
+  allowed_values: [cellular, telephone]
+- name: month
+  dtype: string
+  required: true
+  nullable: false
+  allowed_values: [apr, aug, dec, jul, jun, mar, may, nov, oct, sep]
+- name: day_of_week
+  dtype: string
+  required: true
+  nullable: false
+  allowed_values: [fri, mon, thu, tue, wed]
+- {name: duration, dtype: integer, required: true, nullable: false, min: 0, max: 5410}
+- {name: campaign, dtype: integer, required: true, nullable: false, min: 0, max: 62}
+- {name: pdays, dtype: integer, required: true, nullable: false, min: 0, max: 1099}
+- {name: previous, dtype: integer, required: true, nullable: false, min: 0, max: 8}
+- name: poutcome
+  dtype: string
+  required: true
+  nullable: false
+  allowed_values: [failure, nonexistent, success]
+- {name: emp.var.rate, dtype: number, required: true, nullable: false, min: -3.88, max: 1.88}
+- {name: cons.price.idx, dtype: number, required: true, nullable: false, min: 91.9443, max: 95.0236}
+- {name: cons.conf.idx, dtype: number, required: true, nullable: false, min: -53.19, max: -24.5099}
+- {name: euribor3m, dtype: number, required: true, nullable: false, min: 0.1929, max: 5.4861}
+- {name: nr.employed, dtype: number, required: true, nullable: false, min: 4937.15, max: 5254.55}
+- name: y
+  dtype: string
+  required: true
+  nullable: false
+  allowed_values: ['no', 'yes']
+drift: {psi_moderate: 0.1, psi_major: 0.25, bins: 10}
