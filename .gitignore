@@ -4,7 +4,14 @@ __pycache__/
 venv/
 .pytest_cache/
 results/
+reports/
 .DS_Store
 
 # real datasets: keep big files out of git (download with scripts/download_bank_marketing.py)
 data/raw/bank_marketing.csv
+
+# Sprint 7 drift demo files (made by scripts/make_drift_demo.py from bank_marketing.csv)
+data/demo/
+
+# secrets
+.env

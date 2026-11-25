@@ -162,6 +162,20 @@ All personal data in `data/raw/customers_pii.csv` is **fake**, taken from ranges
 (`@example.com`, `555-01xx` phones, SSN areas 000/666, payment test cards, TEST-NET IPs).
 Summary for the presentation: [`docs/module2_summary.md`](docs/module2_summary.md) · [`docs/sprint6_summary.md`](docs/sprint6_summary.md)
 
+## Data contracts & drift (Sprint 7)
+A contract (`contracts/<name>.yaml`) says what a dataset must look like; `drift` measures how far
+new data moved from a reference (PSI + KS). Exit codes: 0 pass, 1 fail (error rule / major drift), 2 bad input.
+```bash
+python gatekeeper.py contract init data/demo/bank_reference.csv --name bank_marketing   # draft, then edit
+python gatekeeper.py validate new.csv --contract contracts/bank_marketing.yaml          # -> reports/new_contract.json
+python gatekeeper.py drift data/demo/bank_reference.csv new.csv --contract contracts/bank_marketing.yaml
+docker build -t data-gatekeeper .
+docker run --rm -v "$PWD:/work" -w /work data-gatekeeper validate new.csv --contract contracts/bank_marketing.yaml
+```
+Demo (Bank Marketing, seed 42): the clean 30% split passes 97/97 rules with 21/21 columns stable; the
+shifted file fails 2 rules and shows major drift on exactly `duration` (PSI 8.26), `contact` (0.58) and
+`age` (0.31). Example with every rule: [`contracts/example.yaml`](contracts/example.yaml). Details: [`docs/sprint-07.md`](docs/sprint-07.md)
+
 ## Project structure
 
 ```
