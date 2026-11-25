@@ -3,6 +3,25 @@
 All notable changes to Data Gatekeeper. Format based on [Keep a Changelog](https://keepachangelog.com/);
 versions follow the `report_version` of `profiling_report.json`.
 
+## [1.6] — 2026-11-25 — Sprint 7: data contracts + drift gate (Module 3 starts)
+New files: `contracts/<name>.yaml`, `reports/<dataset>_contract.json`, `reports/<current>_drift.json`.
+
+### Added
+- **Data contracts** (`src/validation/contract.py`, `contracts/example.yaml`): per column dtype, required,
+  nullable / max_missing_pct, allowed_values, min / max, regex, unique, pii; table min_rows,
+  max_duplicate_rows_pct, extra_columns; severity `error` / `warn` per rule.
+  `contract init` drafts a contract from a reference file with the profiler (no PII values written).
+- **Drift** (`src/validation/drift.py`): PSI over 10 reference-decile bins (+ a missing bin) and the KS
+  statistic for numeric columns; PSI over categories with new / vanished categories. Thresholds
+  (0.1 / 0.25) configurable under `drift:`. PII columns: no bin edges or categories, unseen values masked.
+- **CLI `gatekeeper.py`**: `contract init`, `validate`, `drift`; exit codes 0 pass, 1 fail, 2 bad input.
+- `scripts/make_drift_demo.py` (seed 42), `Dockerfile`, CI jobs `contract-gate` and `docker`.
+- Tests 219 → 297.
+
+### Demo (Bank Marketing)
+Clean split: 97/97 rules pass, 21/21 columns stable. Shifted file: 2 error rules fail, major drift on
+exactly `duration` (PSI 8.26), `contact` (0.58), `age` (0.31). See `docs/sprint-07.md`.
+
 ## [1.5] — 2026-11-21 — Sprint 6: transformation, PII masking, API (Module 2 complete)
 `profiling_report.json` stays at 1.2, `cleaning_log.json` at 1.0 (one new field:
 `quality.after.flag_columns`). New files: `transform_report.json`, `transform_pipeline.joblib`,

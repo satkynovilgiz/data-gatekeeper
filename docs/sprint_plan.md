@@ -101,12 +101,15 @@ fitted on 32,940 train rows only; 9/9 fake PII columns found, 0 in Bank; 219 tes
 
 ## Module 3 — Validate + anomaly detection
 
-### Sprint 7 ⏳ — Rule-based validation
-- Define expectations (not null, in range, allowed values, unique, regex)
-- Run them on the cleaned data → pass/fail per rule
-- `validation_report.json` + overall quality score
+### Sprint 7 ✅ — Data contracts + drift gate
+- ✅ YAML data contracts: dtype, required, nullable / max_missing_pct, allowed values, min / max, regex,
+  unique; table rules; severity error / warn per rule; `contract init` drafts one from a reference file
+- ✅ `gatekeeper validate` → pass/fail table + `reports/<dataset>_contract.json`, exit codes 0 / 1 / 2
+- ✅ Drift pulled forward from Sprint 9: PSI + KS per column, new categories, PII never shown
+- ✅ Dockerfile + CI contract gate pulled forward from Sprint 11
 
-**Deliverable:** rule checks with a JSON report.
+**Result:** clean Bank split passes 97/97 rules, 21/21 columns stable; the shifted file fails 2 rules
+with major drift on exactly the 3 changed columns; 297 tests. See `docs/sprint-07.md`.
 
 ### Sprint 8 ⏳ — Anomaly detection (ML)
 - Isolation Forest on numeric columns (scikit-learn)
