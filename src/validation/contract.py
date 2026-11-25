@@ -508,3 +508,13 @@ def contract_to_yaml(contract: dict, reference: str) -> str:
     body = yaml.safe_dump(contract, sort_keys=False, allow_unicode=True,
                           default_flow_style=None, width=100)
     return header + body
+
+
+def contract_ranges(contract: dict) -> dict[str, list[float]]:
+    """{column: [min, max]} for columns whose contract sets both (for step 8b on new rows)."""
+    out = {}
+    for spec in contract["columns"]:
+        rules = spec["rules"]
+        if "min" in rules and "max" in rules:
+            out[spec["name"]] = [float(rules["min"][0]), float(rules["max"][0])]
+    return out
