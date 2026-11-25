@@ -175,31 +175,6 @@ def parse_levels(text: str) -> tuple[float, ...]:
     return levels if 0.0 in levels else (0.0, *levels)
 
 
-def impact_files(df: pd.DataFrame, name: str, target: str, reports_dir: str | Path,
-                 folds: int = 5, robustness: bool = True, positive: str | None = None,
-                 levels: tuple[float, ...] = (0.0, 0.05, 0.10, 0.20)) -> dict:
-    """Run the impact study and write <name>_impact.json / .md (+ _robustness.png)."""
-    from src.impact.impact import run_impact
-    from src.impact.report import robustness_chart, to_markdown
-
-    if target not in df.columns:
-        raise InputError(f"target column {target!r} not found")
-    try:
-        report = run_impact(df, target, positive=positive, folds=folds,
-                            robustness=robustness, levels=levels, dataset=name)
-    except ValueError as e:
-        raise InputError(str(e)) from None
-    out = Path(reports_dir)
-    files = {"json": str(write_json(report, out, f"{name}_impact.json"))}
-    if robustness:
-        files["chart"] = str(robustness_chart(report, out / f"{name}_robustness.png"))
-    md = out / f"{name}_impact.md"
-    md.write_text(to_markdown(report), encoding="utf-8")
-    files["markdown"] = str(md)
-    report["files"] = files
-    return report
-
-
 def cmd_impact(args: argparse.Namespace) -> int:
     """`impact`: does gatekeeper cleaning help a model? A/B/C with 5-fold CV."""
     df = read_data(args.csv)
@@ -211,10 +186,16 @@ def cmd_impact(args: argparse.Namespace) -> int:
     if args.sample:
         df = stratified_sample(df[df[args.target].notna()], args.target, args.sample)
         name += f"_sample{args.sample}"
-    report = impact_files(df, name, args.target, args.reports_dir, folds=args.folds,
-                          robustness=not args.no_robustness, positive=args.positive,
-                          levels=parse_levels(args.levels))
-    from src.impact.report import comparison_table, results_table
+    from src.impact.impact import run_impact
+    from src.impact.report import comparison_table, results_table, write_impact_report
+
+    try:
+        report = run_impact(df, args.target, positive=args.positive, folds=args.folds,
+                            robustness=not args.no_robustness,
+                            levels=parse_levels(args.levels), dataset=name)
+    except ValueError as e:
+        raise InputError(str(e)) from None
+    write_impact_report(report, args.reports_dir, name)
 
     print(results_table(report))
     print()

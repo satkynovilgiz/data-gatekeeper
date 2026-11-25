@@ -74,6 +74,7 @@ MODELS = ("logreg", "hgb")
 METRICS = ("roc_auc", "pr_auc", "f1", "brier")
 LOWER_IS_BETTER = {"brier"}
 PAIRS = (("B", "A"), ("C", "A"), ("B", "C"))
+MIN_WILCOXON_FOLDS = 5
 
 
 def make_model(name: str) -> Any:
@@ -213,10 +214,14 @@ def paired(a: list[float], b: list[float], lower_is_better: bool = False) -> dic
     mean = float(d.mean())
     sd = float(d.std(ddof=1)) if n > 1 else 0.0
     half = float(stats.t.ppf(0.975, n - 1) * sd / np.sqrt(n)) if n > 1 else float("nan")
-    try:
-        p = float(stats.wilcoxon(d).pvalue) if np.any(d != 0) else 1.0
-    except ValueError:
-        p = None
+    p: float | None = None          # fewer than 5 folds: a Wilcoxon p-value says nothing
+    if n >= MIN_WILCOXON_FOLDS:
+        if not np.any(d != 0):
+            p = 1.0
+        else:
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore")      # tie / zero-handling notices
+                p = float(stats.wilcoxon(d).pvalue)
     lo, hi = mean - half, mean + half
     if lo > 0:
         verdict = "worse" if lower_is_better else "better"

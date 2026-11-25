@@ -1,6 +1,7 @@
 """Impact report as markdown tables and the robustness line chart (Sprint 8)."""
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import matplotlib
@@ -107,3 +108,23 @@ def robustness_chart(report: dict, path: str | Path) -> Path:
     fig.savefig(path, dpi=120)
     plt.close(fig)
     return path
+
+
+def write_impact_report(report: dict, out_dir: str | Path, name: str) -> dict:
+    """Write <name>_impact.json, <name>_impact.md and <name>_robustness.png (if measured).
+
+    Adds report["files"] = {kind: path} and returns it.
+    """
+    out = Path(out_dir)
+    out.mkdir(parents=True, exist_ok=True)
+    files = {}
+    if "robustness" in report:
+        files["chart"] = str(robustness_chart(report, out / f"{name}_robustness.png"))
+    md = out / f"{name}_impact.md"
+    md.write_text(to_markdown(report), encoding="utf-8")
+    files["markdown"] = str(md)
+    path = out / f"{name}_impact.json"
+    files["json"] = str(path)
+    report["files"] = files
+    path.write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
+    return files
