@@ -399,11 +399,11 @@ def validate_dataframe(df: pd.DataFrame, contract: dict, dataset: str = "dataset
 
 # ---------------------------------------------------------------- init
 def _floor(x: float, integer: bool) -> float:
-    return math.floor(x) if integer else math.floor(x * 1e4) / 1e4
+    return math.floor(x) if integer else math.floor(round(x * 1e4, 6)) / 1e4
 
 
 def _ceil(x: float, integer: bool) -> float:
-    return math.ceil(x) if integer else math.ceil(x * 1e4) / 1e4
+    return math.ceil(x) if integer else math.ceil(round(x * 1e4, 6)) / 1e4
 
 
 def _num(x: float) -> int | float:
@@ -489,7 +489,7 @@ def draft_contract(df: pd.DataFrame, name: str, source: str | None = None) -> di
         "dataset": source or name,
         "table": {
             "min_rows": max(1, math.ceil(rows * ROWS_SHARE)),
-            "max_duplicate_rows_pct": {"value": max(1.0, round(dup_pct * 2, 2)),
+            "max_duplicate_rows_pct": {"value": min(100.0, max(1.0, round(dup_pct * 2, 2))),
                                        "severity": "warn"},
             "extra_columns": "warn",
         },
