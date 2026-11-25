@@ -105,6 +105,11 @@ DEFAULT_CONFIG: dict[str, Any] = {
     # hide 10% of known values and score every imputer on them (slower: off by default)
     "evaluate_imputers": False,
     "max_examples": 3,
+    # New rows only (prediction mode, Sprint 9). Codes people use for "no value"; on new
+    # rows they become NaN when the train rows of that column never had them.
+    "common_sentinels": [999, 9999, -1, -999],
+    # What the train rows looked like (learn_from_train()); None when cleaning one file.
+    "learned": None,
 }
 
 IMPUTE_STRATEGIES = {*METHODS, "none"}
@@ -570,10 +575,64 @@ def handle_outliers(run: CleaningRun) -> None:
     }
 
 
-# Steps 1-8 change each row on its own (no statistics learned across rows), so they can
+def learn_from_train(df: pd.DataFrame, numeric: list[str], sentinels: list[float],
+                     ranges: dict[str, list[float]] | None = None) -> dict:
+    """What new rows are compared with: per numeric column the [min, max] of the (cleaned)
+    train rows, and which common sentinels the train rows really contained.
+
+    ranges: limits that replace the learned ones (e.g. a contract's min / max).
+    """
+    learned: dict[str, dict] = {"ranges": {}, "seen_sentinels": {}}
+    for c in numeric:
+        if c not in df.columns:
+            continue
+        s = pd.to_numeric(df[c], errors="coerce").dropna()
+        if s.empty:
+            continue
+        learned["ranges"][c] = [float(s.min()), float(s.max())]
+        learned["seen_sentinels"][c] = [v for v in sentinels if (s == v).any()]
+    for c, (lo, hi) in (ranges or {}).items():
+        if c in learned["ranges"]:
+            learned["ranges"][c] = [float(lo), float(hi)]
+    return learned
+
+
+def out_of_range_to_missing(run: CleaningRun) -> None:
+    """Step 8b (new rows only): values the train rows never had become NaN BEFORE imputing.
+
+    Found by the Sprint 8 robustness test: a 999 in euribor3m (train range 0.6-5.0) stayed
+    a number, and the iterative imputer then filled other gaps of that row from it. So:
+      - a number outside the train range (or the contract's min / max) -> NaN
+      - a common sentinel (999, 9999, -1, -999) the train rows of that column never had
+        -> NaN, even inside the range (duration 999 when train never had 999)
+    Does nothing when no train rows were learned (cleaning one file: config learned=None).
+    Business rules (age 0-120) were already applied by step 8.
+    """
+    learned = run.config.get("learned")
+    if not learned:
+        return
+    for c in run.cols("numeric"):
+        if c not in learned["ranges"]:
+            continue
+        s = pd.to_numeric(run.df[c], errors="coerce")
+        lo, hi = learned["ranges"][c]
+        outside = s.notna() & ((s < lo) | (s > hi))
+        unseen = [v for v in run.config["common_sentinels"]
+                  if v not in learned["seen_sentinels"].get(c, [])]
+        sentinel = s.notna() & s.isin(unseen) & ~outside
+        new = s.mask(outside | sentinel)
+        run.record("out_of_range_to_missing", c, f"outside the train range [{lo:g}, {hi:g}] -> NaN",
+                   outside, run.df[c], new)
+        run.record("out_of_range_to_missing", c, f"sentinel never seen in train "
+                   f"({', '.join(f'{v:g}' for v in unseen)}) -> NaN", sentinel, run.df[c], new)
+        run.df[c] = new
+
+
+# Steps 1-8b change each row on its own (no statistics learned across rows), so they can
 # be applied to new rows with a schema learned elsewhere (Sprint 8 impact, per CV fold).
 ROW_STEPS = [trim_whitespace, special_codes, disguised_missing_to_nan, normalise_categories,
-             convert_to_number, parse_dates, invalid_format_to_nan, impossible_value_to_nan]
+             convert_to_number, parse_dates, invalid_format_to_nan, impossible_value_to_nan,
+             out_of_range_to_missing]
 STEPS = [*ROW_STEPS, drop_duplicates, fuzzy_duplicates, handle_outliers, impute]
 
 
@@ -635,6 +694,7 @@ def _summary(run: CleaningRun, rows_before: int, cols_before: int) -> dict:
         "not_a_date_to_nan": total("parse_dates", rule_start="not a date"),
         "invalid_format_to_nan": total("invalid_format_to_nan"),
         "impossible_values_fixed": total("impossible_value_to_nan"),
+        "out_of_range_to_missing": total("out_of_range_to_missing"),
         "fuzzy_duplicates": {k: v for k, v in run.fuzzy.items()
                              if k not in ("pairs", "key_columns", "compared_columns")},
         "outliers": {**run.outlier_stats,
