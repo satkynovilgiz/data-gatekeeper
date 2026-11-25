@@ -111,12 +111,17 @@ fitted on 32,940 train rows only; 9/9 fake PII columns found, 0 in Bank; 219 tes
 **Result:** clean Bank split passes 97/97 rules, 21/21 columns stable; the shifted file fails 2 rules
 with major drift on exactly the 3 changed columns; 297 tests. See `docs/sprint-07.md`.
 
-### Sprint 8 ⏳ — Anomaly detection (ML)
-- Isolation Forest on numeric columns (scikit-learn)
-- Z-score / IQR as a simple baseline to compare
-- Explain the top anomalies (which columns made them unusual)
+### Sprint 8 ✅ — Downstream impact + one-command pipeline
+- ✅ `gatekeeper impact`: A raw / B gatekeeper / C median imputer, 5-fold CV, two models, paired CIs,
+  fitted per fold only (a spy test proves it)
+- ✅ Robustness to dirty data: seeded corruption at 0 / 5 / 10 / 20%, table + chart
+- ✅ `gatekeeper run --config pipeline.yaml` (pulled forward from Sprint 10), Docker + CI
+- ➡️ Moved to Sprint 9: anomaly detection section (Isolation Forest explanations), the sentinel fix
+  found by the robustness test, per-step ablation
 
-**Deliverable:** anomaly section in `validation_report.json`.
+**Result:** no ROC-AUC gain on Bank Marketing; LogReg PR-AUC +0.0197 [+0.0108, +0.0285]; much more robust to
+missing / malformed values, but unrecognised `999` sentinels hurt with the iterative imputer; 351 tests.
+See `docs/sprint-08.md`.
 
 ### Sprint 9 ⏳ — Schema + drift checks
 - Auto-generate expectations from a "good" dataset

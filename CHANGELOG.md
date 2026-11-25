@@ -3,6 +3,31 @@
 All notable changes to Data Gatekeeper. Format based on [Keep a Changelog](https://keepachangelog.com/);
 versions follow the `report_version` of `profiling_report.json`.
 
+## [1.7] — 2026-11-25 — Sprint 8: downstream impact + one-command pipeline
+New files: `reports/<name>_impact.json/.md`, `reports/<name>_robustness.png`,
+`reports/run_<UTC time>/summary.json/.md`.
+
+### Added
+- **`gatekeeper impact`** (`src/impact/`): A raw / B gatekeeper / C median-imputer with 5-fold stratified CV
+  (seed 42), LogisticRegression + HistGradientBoosting, ROC-AUC / PR-AUC / F1 / Brier as mean ± std, paired
+  fold differences with 95% t-interval and Wilcoxon; everything fitted on the train rows of each fold only.
+- **Robustness test**: seeded injectors (missing, `999` / `?` sentinels, decimal-comma numbers, duplicate
+  rows) at 0 / 5 / 10 / 20% on the test folds; table + line chart.
+- **`FoldImputer`** and `encode(like=...)` (`src/cleaning/imputers.py`): the Sprint 5 imputers as fit / transform.
+- **`gatekeeper run --config pipeline.yaml`** (`src/pipeline/run.py`): profile → validate → clean → mask_pii
+  → quality → drift → impact; contract gate exit 1, `--skip STEP`, summary JSON + markdown per run.
+- `pipeline.yaml`, `tests/fixtures/pipeline_ci.yaml`, `scripts/diagnose_combined_corruption.py`.
+- Docker image ships `pipeline.yaml`; CI runs the fixture pipeline locally and in Docker.
+- Tests 297 → 351.
+
+### Changed
+- `cleaner.ROW_STEPS` names the row-wise cleaning steps 1–8 (no behaviour change).
+
+### Findings (Bank Marketing)
+No ROC-AUC gain from cleaning (LogReg −0.0002, HGB +0.0001, CIs include 0); LogReg PR-AUC +0.0197 and Brier
+−0.0013 (CIs exclude 0), the same with a median imputer. With combined corruption the iterative imputer
+amplifies unrecognised `999` sentinels (HGB 0.6368 vs 0.6906 at 20%). See `docs/sprint-08.md`.
+
 ## [1.6] — 2026-11-25 — Sprint 7: data contracts + drift gate (Module 3 starts)
 New files: `contracts/<name>.yaml`, `reports/<dataset>_contract.json`, `reports/<current>_drift.json`.
 
