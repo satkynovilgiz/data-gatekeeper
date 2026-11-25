@@ -570,9 +570,11 @@ def handle_outliers(run: CleaningRun) -> None:
     }
 
 
-STEPS = [trim_whitespace, special_codes, disguised_missing_to_nan, normalise_categories,
-         convert_to_number, parse_dates, invalid_format_to_nan, impossible_value_to_nan,
-         drop_duplicates, fuzzy_duplicates, handle_outliers, impute]
+# Steps 1-8 change each row on its own (no statistics learned across rows), so they can
+# be applied to new rows with a schema learned elsewhere (Sprint 8 impact, per CV fold).
+ROW_STEPS = [trim_whitespace, special_codes, disguised_missing_to_nan, normalise_categories,
+             convert_to_number, parse_dates, invalid_format_to_nan, impossible_value_to_nan]
+STEPS = [*ROW_STEPS, drop_duplicates, fuzzy_duplicates, handle_outliers, impute]
 
 
 # -------------------------------------------------------------- pipeline

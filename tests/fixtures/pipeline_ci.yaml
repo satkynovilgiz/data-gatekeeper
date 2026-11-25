@@ -1,0 +1,22 @@
+# Small pipeline for CI and the tests: every step on the 8-row orders fixture.
+# Run it with --skip impact (impact needs more rows; it is tested on its own).
+input: tests/fixtures/orders_ok.csv
+name: orders
+reports_dir: reports
+steps:
+  - profile
+  - validate:
+      contract: contracts/example.yaml
+  - clean:
+      imputer: median
+  - mask_pii:
+      actions: {email: mask}
+  - quality
+  - drift:
+      reference: tests/fixtures/orders_ok.csv
+      contract: contracts/example.yaml
+      gate: true
+  - impact:
+      target: paid
+      folds: 2
+      robustness: false

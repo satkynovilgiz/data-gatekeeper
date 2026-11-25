@@ -32,6 +32,7 @@ from sklearn.impute import IterativeImputer, KNNImputer
 from sklearn.linear_model import LinearRegression, LogisticRegression
 
 ML_METHODS = ("knn", "regression", "iterative")
+FOLD_METHODS = ("median", "knn", "iterative")    # methods FoldImputer can fit/apply
 METHODS = ("median", "mean", "mode", *ML_METHODS)
 KNN_NEIGHBOURS = 5
 ITERATIVE_ROUNDS = 10
@@ -62,25 +63,34 @@ class Encoded:
     drop_first: bool = False                  # True: the first category has no column
 
 
-def encode(df: pd.DataFrame, columns: list[str], drop_first: bool = False) -> Encoded:
+def encode(df: pd.DataFrame, columns: list[str], drop_first: bool = False,
+           like: Encoded | None = None) -> Encoded:
     """Numbers -> z-scores, categories -> one-hot (all NaN when missing). NaN stays NaN.
 
     drop_first=True leaves out the first category's column ("all zeros" = first category).
     IterativeImputer needs this: with full one-hot, zone_low = 1 - zone_high exactly, so
     when both are hidden each one is predicted from the other (a circular guess ~0.5).
+
+    like: encode with another table's means / stds / category lists (e.g. new rows with
+    what was learned on the train rows), so the columns line up and nothing is re-learned.
+    A category the train rows never had becomes all zeros.
     """
     parts, slices, scale, categories = [], {}, {}, {}
     pos = 0
     for c in columns:
         s = df[c]
-        if is_numeric(s):
-            x = s.astype(float).to_numpy()
-            mean, std = float(np.nanmean(x)), float(np.nanstd(x)) or 1.0
+        numeric = c in like.scale if like else is_numeric(s)
+        if numeric:
+            x = pd.to_numeric(s, errors="coerce").astype(float).to_numpy()
+            if like:
+                mean, std = like.scale[c]
+            else:
+                mean, std = float(np.nanmean(x)), float(np.nanstd(x)) or 1.0
             parts.append(((x - mean) / std)[:, None])
             scale[c] = (mean, std)
             width = 1
         else:
-            cats = sorted(s.dropna().astype(str).unique())
+            cats = like.categories[c] if like else sorted(s.dropna().astype(str).unique())
             onehot = (s.astype(str).to_numpy()[:, None] == np.array(cats)[None, :]).astype(float)
             onehot[s.isna().to_numpy()] = np.nan
             if drop_first:
@@ -206,3 +216,106 @@ def impute_columns(df: pd.DataFrame, targets: list[str], features: list[str],
     for t in targets:
         out[t] = _finish(df[t], decode(enc, X, t))
     return out
+
+
+# ------------------------------------------------------- fit on train, apply to new
+class FoldImputer:
+    """The same imputation as impute_columns, split into fit (train rows) and transform.
+
+    impute_columns fills the table it learns from, which is right for cleaning one file.
+    To measure a model honestly (Sprint 8, cross-validation) the imputer must learn on the
+    train rows only and then fill the test rows with what it learned. FoldImputer does
+    that with the same encoding, the same models and the same clipping:
+        median     median (whole numbers stay whole) / mode, learned on train
+        knn        KNNImputer on the train encoding
+        iterative  IterativeImputer (MICE, 10 rounds, seed 42) on the train encoding
+    targets: the columns to fill; features: the columns the ML methods may look at.
+    Works on DataFrames (scikit-learn style fit / transform, usable in a Pipeline).
+    """
+
+    def __init__(self, method: str = "iterative", targets: list[str] | None = None,
+                 features: list[str] | None = None) -> None:
+        self.method = method
+        self.targets = targets
+        self.features = features
+
+    def get_params(self, deep: bool = True) -> dict:
+        """scikit-learn: the constructor arguments (so a Pipeline can clone it)."""
+        return {"method": self.method, "targets": self.targets, "features": self.features}
+
+    def set_params(self, **params: object) -> FoldImputer:
+        """scikit-learn: change constructor arguments."""
+        for k, v in params.items():
+            setattr(self, k, v)
+        return self
+
+    def fit(self, X: pd.DataFrame, y: object = None) -> FoldImputer:
+        """Learn fill values / the imputation model from the train rows X."""
+        if self.method not in FOLD_METHODS:
+            raise ValueError(f"FoldImputer method must be one of {FOLD_METHODS}")
+        targets = [t for t in (self.targets if self.targets is not None else list(X.columns))
+                   if t in X.columns and X[t].notna().any()]
+        self.targets_ = targets
+        # known range of each numeric target on train, for clipping like _finish()
+        self.ranges_ = {}
+        for t in targets:
+            if is_numeric(X[t]):
+                known = X[t].dropna().astype(float)
+                self.ranges_[t] = (float(known.min()), float(known.max()),
+                                   bool((known % 1 == 0).all()))
+        if self.method == "median":
+            self.values_ = {t: _fill_value(X[t]) for t in targets}
+            return self
+        columns = list(dict.fromkeys([*targets, *(self.features or [])]))
+        self.columns_ = [c for c in columns if c in X.columns and X[c].notna().any()]
+        self.encoding_ = encode(X, self.columns_, drop_first=(self.method == "iterative"))
+        with warnings.catch_warnings(), np.errstate(divide="ignore", over="ignore",
+                                                    invalid="ignore"):
+            warnings.simplefilter("ignore", ConvergenceWarning)
+            if self.method == "knn":
+                self.model_ = KNNImputer(n_neighbors=KNN_NEIGHBOURS).fit(self.encoding_.X)
+            else:
+                self.model_ = IterativeImputer(max_iter=ITERATIVE_ROUNDS,
+                                               random_state=SEED).fit(self.encoding_.X)
+        return self
+
+    def transform(self, X: pd.DataFrame) -> pd.DataFrame:
+        """Fill the gaps in X's target columns with what was learned in fit()."""
+        out = X.copy()
+        if self.method == "median":
+            for t, value in self.values_.items():
+                if t in out.columns:
+                    out[t] = out[t].fillna(value)
+            return out
+        enc = encode(X, self.columns_, drop_first=self.encoding_.drop_first,
+                     like=self.encoding_)
+        with warnings.catch_warnings(), np.errstate(divide="ignore", over="ignore",
+                                                    invalid="ignore"):
+            warnings.simplefilter("ignore", ConvergenceWarning)
+            filled = self.model_.transform(enc.X)
+        for t in self.targets_:
+            gaps = out[t].isna().to_numpy()
+            if not gaps.any():
+                continue
+            values = decode(self.encoding_, filled, t)
+            if t in self.ranges_:
+                lo, hi, whole = self.ranges_[t]
+                values = np.clip(values.astype(float), lo, hi)
+                if whole:
+                    values = np.round(values)
+                col = pd.to_numeric(out[t], errors="coerce").astype(float)
+            else:
+                col = out[t].astype(object)
+            col[gaps] = values[gaps]
+            out[t] = col
+        return out
+
+    def fit_transform(self, X: pd.DataFrame, y: object = None) -> pd.DataFrame:
+        """fit(X) then transform(X)."""
+        return self.fit(X, y).transform(X)
+
+
+def _fill_value(s: pd.Series) -> object:
+    """The single value _simple(s, "median") fills a gap with (median / mode)."""
+    gap = pd.Series([np.nan], dtype=float if is_numeric(s) else object)
+    return _simple(pd.concat([s, gap], ignore_index=True), "median").iloc[-1]
