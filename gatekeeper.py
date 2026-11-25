@@ -1,15 +1,19 @@
-"""gatekeeper — data contracts and drift checks from the command line (Sprint 7).
+"""gatekeeper — data contracts, drift, anomalies, impact and the pipeline (Sprints 7-9).
 
     python gatekeeper.py contract init <reference.csv> [--name NAME] [--out FILE] [--force]
     python gatekeeper.py validate <data.csv> --contract contracts/NAME.yaml
+                         [--reference REF.csv] [--anomalies] [--fail-on-anomaly-share X]
+    python gatekeeper.py anomalies <data.csv> [--method iforest|zscore|iqr|all] [--top 10]
     python gatekeeper.py drift <reference.csv> <current.csv> [--contract FILE]
     python gatekeeper.py impact <data.csv> --target y [--folds 5] [--no-robustness]
     python gatekeeper.py run --config pipeline.yaml [--skip impact]
 
 Exit codes (for CI):
     validate  0 = every error rule passed (warnings allowed)
-              1 = at least one error rule failed
+              1 = at least one error rule failed (or, with --fail-on-anomaly-share X,
+                  more than X of the rows were flagged as anomalies)
               2 = bad contract or bad input (missing / unreadable file, invalid YAML ...)
+    anomalies 0 = report written (1 only with --fail-on-anomaly-share), 2 = bad input
     drift     0 = no column with major drift, 1 = at least one, 2 = bad input
     contract init: 0 = written, 2 = bad input or the file exists (use --force)
     impact    0 = report written, 2 = bad input
@@ -17,7 +21,9 @@ Exit codes (for CI):
               with gate: true), 2 = bad config or a step crashed
 
 Reports are written to reports/ (change with --reports-dir):
-    reports/<dataset>_contract.json and reports/<current>_drift.json
+    reports/<dataset>_validation_report.json (contract + drift + anomalies, Sprint 9;
+    docs/validation_report.schema.json), reports/<dataset>_contract.json (the contract part,
+    as in Sprint 7), reports/<current>_drift.json, reports/<dataset>_anomalies.json
 """
 from __future__ import annotations
 
@@ -34,7 +40,6 @@ from src.validation.contract import (
     contract_to_yaml,
     draft_contract,
     load_contract,
-    validate_dataframe,
 )
 from src.validation.drift import drift_report
 
@@ -97,28 +102,93 @@ def cmd_init(args: argparse.Namespace) -> int:
     return EXIT_OK
 
 
+def _anomaly_lines(section: dict, method: str, rows: int = 3) -> list[str]:
+    """A few printed lines about one method's top rows (row position + reasons)."""
+    m = section["methods"][method]
+    out = [f"{method}: {m['flagged']} of {section['rows']} rows flagged "
+           f"({m['flagged_share']:.2%}), fitted on {section['fitted_on']}"]
+    for t in m["top"][:rows]:
+        why = "; ".join(f"{r['column']}={r['value']:g} (median {r['median']:g}, z "
+                        f"{'-' if r['robust_z'] is None else r['robust_z']})"
+                        for r in t["reasons"] if r["value"] is not None)
+        out.append(f"  #{t['rank']} row {t['row']} score {t['score']:.3f}: {why}")
+    return out
+
+
 def cmd_validate(args: argparse.Namespace) -> int:
-    """`validate`: check a CSV against a contract; exit 1 when an error rule fails."""
+    """`validate`: contract (+ drift, + anomalies) -> one validation report; exit 1 on fail."""
+    from src.validation.report import parse_methods, validation_report
+
     contract = load_contract(args.contract)
     df = read_data(args.csv)
+    reference = read_data(args.reference) if args.reference else None
     name = Path(args.csv).stem
-    report = validate_dataframe(df, contract, dataset=name)
-    report["contract"] = str(args.contract)
+    try:
+        methods = parse_methods(args.anomaly_method)
+        report = validation_report(
+            df, contract, name, reference=reference,
+            reference_name=Path(args.reference).name if args.reference else "reference",
+            anomalies=args.anomalies, methods=methods, contamination=args.contamination,
+            exclude=args.exclude, fail_on_share=args.fail_on_anomaly_share)
+    except ValueError as e:
+        raise InputError(str(e)) from None
+    part = report["contract"]
+    part["contract"] = str(args.contract)
 
     order = {"fail": 0, "warn": 1, "skipped": 2, "pass": 3}
-    shown = sorted(report["results"], key=lambda r: order[r["status"]])
+    shown = sorted(part["results"], key=lambda r: order[r["status"]])
     if args.failures_only:
         shown = [r for r in shown if r["status"] in ("fail", "warn")]
     print(table([[r["rule"], r["column"] or "(table)", r["severity"], r["status"].upper(),
                   r["observed"], r["expected"]] for r in shown],
                 ["rule", "column", "severity", "status", "observed", "expected"]))
-    c = report["counts"]
-    path = write_json(report, args.reports_dir, f"{name}_contract.json")
-    print(f"\n{report['status'].upper()}: {c['passed']} passed, {c['failed_error']} failed "
-          f"(error), {c['failed_warn']} warnings, {c['skipped']} skipped "
-          f"of {c['rules']} rules  |  {report['rows']} rows")
-    print(f"Report -> {path}")
+    c = part["counts"]
+    write_json(part, args.reports_dir, f"{name}_contract.json")
+    path = write_json(report, args.reports_dir, f"{name}_validation_report.json")
+    print(f"\ncontract  {part['status'].upper()}: {c['passed']} passed, {c['failed_error']} "
+          f"failed (error), {c['failed_warn']} warnings, {c['skipped']} skipped of "
+          f"{c['rules']} rules  |  {part['rows']} rows")
+    if report["drift"]:
+        d = report["drift"]
+        print(f"drift     {d['status'].upper()}: {d['counts']['major']} major, "
+              f"{d['counts']['moderate']} moderate, {d['counts']['stable']} stable"
+              + (f" ({', '.join(d['major_columns'])})" if d["major_columns"] else ""))
+    if report["anomalies"]:
+        gate = report["gates"]["anomalies"]
+        lines = _anomaly_lines(report["anomalies"], gate["method"])
+        limit = "" if gate["limit"] is None else f" (limit {gate['limit']:.2%}: " \
+                f"{gate['status'].upper()})"
+        print("anomalies " + lines[0] + limit)
+        print("\n".join(lines[1:]))
+    print(f"\n{report['status'].upper()}  |  Report -> {path}")
     return EXIT_FAIL if report["status"] == "fail" else EXIT_OK
+
+
+def cmd_anomalies(args: argparse.Namespace) -> int:
+    """`anomalies`: score rows, explain the top ones; never fails unless a limit is set."""
+    from src.validation.anomaly import detect
+    from src.validation.report import parse_methods
+
+    df = read_data(args.csv)
+    reference = read_data(args.reference) if args.reference else None
+    try:
+        methods = parse_methods(args.method)
+        if args.fail_on_anomaly_share is not None and not 0 <= args.fail_on_anomaly_share <= 1:
+            raise ValueError("--fail-on-anomaly-share must be between 0 and 1")
+        section = detect(df, methods=methods, top=args.top, contamination=args.contamination,
+                         reference=reference, exclude=args.exclude)
+    except ValueError as e:
+        raise InputError(str(e)) from None
+    name = Path(args.csv).stem
+    path = write_json(section, args.reports_dir, f"{name}_anomalies.json")
+    print(f"features: {', '.join(section['features'])}")
+    for m in methods:
+        print()
+        print("\n".join(_anomaly_lines(section, m, rows=args.top)))
+    share = section["methods"][methods[0]]["flagged_share"]
+    failed = args.fail_on_anomaly_share is not None and share > args.fail_on_anomaly_share
+    print(f"\nReport -> {path}")
+    return EXIT_FAIL if failed else EXIT_OK
 
 
 def _fmt(v: float | None, digits: int = 4) -> str:
@@ -226,6 +296,16 @@ def cmd_run(args: argparse.Namespace) -> int:
     return code
 
 
+def _anomaly_options(p: argparse.ArgumentParser) -> None:
+    """Options shared by `validate --anomalies` and `anomalies`."""
+    p.add_argument("--contamination", type=float, default=0.01,
+                   help="Isolation Forest share used for its flag threshold (default 0.01)")
+    p.add_argument("--exclude", action="append", default=[], metavar="COLUMN",
+                   help="never use this column (e.g. the label y); repeatable")
+    p.add_argument("--fail-on-anomaly-share", type=float, metavar="X",
+                   help="exit 1 when more than this share of rows is flagged (e.g. 0.05)")
+
+
 def build_parser() -> argparse.ArgumentParser:
     """The argparse parser with the contract / validate / drift sub-commands."""
     p = argparse.ArgumentParser(prog="gatekeeper", description=__doc__.split("\n\n")[0],
@@ -247,7 +327,22 @@ def build_parser() -> argparse.ArgumentParser:
     val.add_argument("--reports-dir", default="reports", help="where the JSON report goes")
     val.add_argument("--failures-only", action="store_true",
                      help="print only failed and warned rules (the JSON has all)")
+    val.add_argument("--reference", help="reference CSV: adds the drift section (and the "
+                     "anomaly models are fitted on it)")
+    val.add_argument("--anomalies", action="store_true", help="add the anomaly section")
+    val.add_argument("--anomaly-method", default="iforest",
+                     help="iforest, zscore, iqr, a comma list or all (first one = the gate's)")
+    _anomaly_options(val)
     val.set_defaults(func=cmd_validate)
+
+    ano = sub.add_parser("anomalies", help="find and explain unusual rows")
+    ano.add_argument("csv", help="dataset (CSV)")
+    ano.add_argument("--method", default="all", help="iforest, zscore, iqr or all (default)")
+    ano.add_argument("--top", type=int, default=10, help="rows to explain per method")
+    ano.add_argument("--reference", help="fit on this CSV and judge the dataset against it")
+    ano.add_argument("--reports-dir", default="reports", help="where the JSON report goes")
+    _anomaly_options(ano)
+    ano.set_defaults(func=cmd_anomalies)
 
     drift = sub.add_parser("drift", help="measure drift of a CSV against a reference CSV")
     drift.add_argument("reference", help="reference dataset (CSV)")
