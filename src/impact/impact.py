@@ -136,16 +136,22 @@ class RowCleaner:
     and learns the train range + seen sentinels of every numeric column, so transform()
     turns values the train rows never had into NaN (step 8b, out_of_range_to_missing).
     ranges: {column: [min, max]} that replace the learned range (e.g. from a contract).
+    value_checks: False skips the steps that remove values for being impossible or out of
+    range (impossible_value_to_nan, out_of_range_to_missing): anomaly detection wants to SEE
+    an age of 137, not a gap.
     """
 
+    VALUE_CHECKS = ("impossible_value_to_nan", "out_of_range_to_missing")
+
     def __init__(self, config: dict | None = None,
-                 ranges: dict[str, list[float]] | None = None) -> None:
+                 ranges: dict[str, list[float]] | None = None, value_checks: bool = True) -> None:
         self.config = config
         self.ranges = ranges
+        self.value_checks = value_checks
 
     def get_params(self, deep: bool = True) -> dict:
         """scikit-learn: the constructor arguments."""
-        return {"config": self.config, "ranges": self.ranges}
+        return {"config": self.config, "ranges": self.ranges, "value_checks": self.value_checks}
 
     def set_params(self, **params: object) -> RowCleaner:
         """scikit-learn: change constructor arguments."""
@@ -157,7 +163,8 @@ class RowCleaner:
         run = CleaningRun(df=X.copy(), schema=self.schema_, config=self.config_,
                           suggestions=self.suggestions_)
         for step in ROW_STEPS:
-            step(run)
+            if self.value_checks or step.__name__ not in self.VALUE_CHECKS:
+                step(run)
         return run
 
     def fit(self, X: pd.DataFrame, y: object = None) -> RowCleaner:
