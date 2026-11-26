@@ -102,13 +102,18 @@ def cmd_init(args: argparse.Namespace) -> int:
     return EXIT_OK
 
 
+def _val(v: object) -> str:
+    """A number as %g, a category as itself."""
+    return f"{v:g}" if isinstance(v, (int, float)) else str(v)
+
+
 def _anomaly_lines(section: dict, method: str, rows: int = 3) -> list[str]:
     """A few printed lines about one method's top rows (row position + reasons)."""
     m = section["methods"][method]
     out = [f"{method}: {m['flagged']} of {section['rows']} rows flagged "
            f"({m['flagged_share']:.2%}), fitted on {section['fitted_on']}"]
     for t in m["top"][:rows]:
-        why = "; ".join(f"{r['column']}={r['value']:g} (median {r['median']:g}, z "
+        why = "; ".join(f"{r['column']}={_val(r['value'])} (typical {_val(r['median'])}, z "
                         f"{'-' if r['robust_z'] is None else r['robust_z']})"
                         for r in t["reasons"] if r["value"] is not None)
         out.append(f"  #{t['rank']} row {t['row']} score {t['score']:.3f}: {why}")
@@ -176,12 +181,15 @@ def cmd_anomalies(args: argparse.Namespace) -> int:
         if args.fail_on_anomaly_share is not None and not 0 <= args.fail_on_anomaly_share <= 1:
             raise ValueError("--fail-on-anomaly-share must be between 0 and 1")
         section = detect(df, methods=methods, top=args.top, contamination=args.contamination,
-                         reference=reference, exclude=args.exclude)
+                         reference=reference, exclude=args.exclude, encoding=args.encoding)
     except ValueError as e:
         raise InputError(str(e)) from None
     name = Path(args.csv).stem
     path = write_json(section, args.reports_dir, f"{name}_anomalies.json")
     print(f"features: {', '.join(section['features'])}")
+    if section["categorical_features"]:
+        print(f"categorical (iforest_with_categories only, {args.encoding} encoding): "
+              f"{', '.join(section['categorical_features'])}")
     for m in methods:
         print()
         print("\n".join(_anomaly_lines(section, m, rows=args.top)))
@@ -337,7 +345,11 @@ def build_parser() -> argparse.ArgumentParser:
 
     ano = sub.add_parser("anomalies", help="find and explain unusual rows")
     ano.add_argument("csv", help="dataset (CSV)")
-    ano.add_argument("--method", default="all", help="iforest, zscore, iqr or all (default)")
+    ano.add_argument("--method", default="all",
+                     help="iforest, zscore, iqr, zscore_mixture, iforest_with_categories, "
+                          "a comma list or all (default)")
+    ano.add_argument("--encoding", default="frequency", choices=["frequency", "onehot"],
+                     help="how iforest_with_categories turns categories into numbers")
     ano.add_argument("--top", type=int, default=10, help="rows to explain per method")
     ano.add_argument("--reference", help="fit on this CSV and judge the dataset against it")
     ano.add_argument("--reports-dir", default="reports", help="where the JSON report goes")
