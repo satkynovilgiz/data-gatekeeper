@@ -11,6 +11,7 @@ reports/
 data/raw/bank_marketing.csv
 data/raw/bank_marketing.csv.sha256
 data/raw/adult.csv
+data/raw/mushroom.csv
 data/raw/adult.csv.sha256
 
 # Sprint 7 drift demo files (made by scripts/make_drift_demo.py from bank_marketing.csv)
