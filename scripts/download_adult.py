@@ -3,7 +3,10 @@
 Source : https://archive.ics.uci.edu/dataset/2/adult  (zip: URL below)
 License: CC BY 4.0 (see docs/dataset.md)
 
-    python scripts/download_adult.py
+    python scripts/download_adult.py            # data/raw/adult.csv (train + test joined)
+    python scripts/download_adult.py --split    # + data/demo/adult_train.csv / adult_test.csv,
+                                                #   the two official parts (for contract init on
+                                                #   train and validate / drift on test)
 
 What the script does, and nothing more (the "mess" is left for the gatekeeper to find):
   1. downloads the official zip and checks its SHA-256 against ZIP_SHA256 (stops on a mismatch)
@@ -20,6 +23,7 @@ The CSV (~5 MB) is NOT stored in git (.gitignore).
 """
 from __future__ import annotations
 
+import argparse
 import csv
 import hashlib
 import io
@@ -35,6 +39,7 @@ COLUMNS = ["age", "workclass", "fnlwgt", "education", "education-num", "marital-
            "hours-per-week", "native-country", "income"]
 RAW_DIR = Path(__file__).resolve().parents[1] / "data" / "raw"
 OUT = RAW_DIR / "adult.csv"
+DEMO_DIR = Path(__file__).resolve().parents[1] / "data" / "demo"
 
 
 class ChecksumError(RuntimeError):
@@ -87,8 +92,13 @@ def build_csv(zip_bytes: bytes) -> tuple[bytes, dict]:
     return buf.getvalue().encode("utf-8"), {"train_rows": len(train), "test_rows": len(test)}
 
 
-def main(out: Path = OUT, url: str = URL, expected: str = ZIP_SHA256) -> dict:
-    """Download, verify, join and write adult.csv (+ .sha256); returns a summary."""
+def main(out: Path = OUT, url: str = URL, expected: str = ZIP_SHA256,
+         split_dir: Path | None = None) -> dict:
+    """Download, verify, join and write adult.csv (+ .sha256); returns a summary.
+
+    split_dir: also write the official train / test parts there as adult_train.csv and
+    adult_test.csv (same header and clean-up as adult.csv).
+    """
     print(f"Downloading {url} ...")
     data = fetch(url)
     verify(data, expected)
@@ -100,11 +110,22 @@ def main(out: Path = OUT, url: str = URL, expected: str = ZIP_SHA256) -> dict:
     info.update(rows=info["train_rows"] + info["test_rows"], csv_sha256=digest, path=str(out))
     print(f"Saved {out}: {info['rows']} rows ({info['train_rows']} train + {info['test_rows']} "
           f"test), SHA-256 {digest}")
+    if split_dir is not None:
+        header, *rows = csv_bytes.decode("utf-8").splitlines(keepends=True)
+        split_dir.mkdir(parents=True, exist_ok=True)
+        cut = info["train_rows"]
+        for name, part in (("adult_train.csv", rows[:cut]), ("adult_test.csv", rows[cut:])):
+            (split_dir / name).write_text(header + "".join(part), encoding="utf-8")
+            print(f"Saved {split_dir / name}: {len(part)} rows")
     return info
 
 
 if __name__ == "__main__":
+    ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    ap.add_argument("--split", action="store_true",
+                    help="also write data/demo/adult_train.csv and adult_test.csv")
+    args = ap.parse_args()
     try:
-        main()
+        main(split_dir=DEMO_DIR if args.split else None)
     except ChecksumError as e:
         sys.exit(f"error: {e}")

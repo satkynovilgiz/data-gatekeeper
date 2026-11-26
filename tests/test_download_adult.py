@@ -88,3 +88,13 @@ def test_pinned_checksum_is_a_sha256():
 def test_broken_rows_are_refused():
     with pytest.raises(ValueError, match="expected 15 values"):
         dl.rows_from("1, 2, 3\n")
+
+
+def test_split_writes_the_official_parts(tmp_path, network):
+    data, _ = network
+    dl.main(out=tmp_path / "adult.csv", expected=hashlib.sha256(data).hexdigest(),
+            split_dir=tmp_path / "demo")
+    train = pd.read_csv(tmp_path / "demo/adult_train.csv", dtype=str)
+    test = pd.read_csv(tmp_path / "demo/adult_test.csv", dtype=str)
+    assert len(train) == 2 and len(test) == 1 and list(test.columns) == dl.COLUMNS
+    assert test["income"].tolist() == [">50K"]
