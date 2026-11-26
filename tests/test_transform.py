@@ -27,7 +27,7 @@ def by_column(plan: list[dict]) -> dict[str, dict]:
 
 
 # ---- planning: each column gets a method and a reason --------------------------------
-def test_plan_picks_a_method_per_column_with_a_reason():
+def test_plan_picks_a_method_per_column_with_a_reason(power_on):
     plan, dropped = plan_columns(customers(), target="y")
     p = by_column(plan)
     assert p["income"]["power"] in ("log", "yeo-johnson") and p["income"]["skew_before"] > 1
@@ -47,7 +47,7 @@ def test_outlier_heavy_column_gets_robust_scaler():
     assert plan[0]["scaler"] == "robust" and "outliers" in plan[0]["reason"]
 
 
-def test_left_skew_is_not_made_worse_by_log():
+def test_left_skew_is_not_made_worse_by_log(power_on):
     # nr.employed in Bank is skewed to the LEFT; log1p makes that worse, so it must not win
     rng = np.random.default_rng(2)
     x = 5300 - rng.lognormal(3, 1, 500)
@@ -120,7 +120,7 @@ def test_output_is_numeric_without_gaps_and_keeps_target():
         result.test["y"].eq("yes").mean(), abs=0.03)                  # stratified split
 
 
-def test_skew_report_before_and_after():
+def test_skew_report_before_and_after(power_on):
     report = transform_dataset(customers(), target="y").report
     income = next(s for s in report["skewed_columns"] if s["column"] == "income")
     assert abs(income["skew_after"]) < abs(income["skew_before"])
@@ -154,10 +154,44 @@ def test_known_order_is_used_only_when_it_fits_the_values():
     """Sprint 10: the Bank 'education' order must not wipe out UCI Adult's 'education'."""
     from src.transform.plan import plan_columns
 
-    bank = pd.DataFrame({"education": ["basic.4y", "high.school", "university.degree",
+    bank =pd.DataFrame({"education": ["basic.4y", "high.school", "university.degree",
                                        "unknown"] * 10})
     adult = pd.DataFrame({"education": ["Bachelors", "HS-grad", "Masters", "11th"] * 10})
     (bank_plan,), _ = plan_columns(bank)
     (adult_plan,), _ = plan_columns(adult)
     assert bank_plan["kind"] == "ordinal"
     assert adult_plan["kind"] == "onehot" and "matches only 0%" in adult_plan["reason"]
+
+
+
+# ---------------------------------------------- Sprint 12: power transforms by evidence
+@pytest.fixture
+def power_on(monkeypatch):
+    """The power-transform machinery (opt-in since Sprint 12)."""
+    from src.transform import plan as tplan
+
+    monkeypatch.setitem(tplan.POWER, "default", True)
+
+
+def test_default_is_scale_only_for_skewed_columns():
+    """Pinned by the Sprint 12 rule (scripts/ablate_power_transform.py)."""
+    from src.transform import plan as tplan
+
+    assert tplan.POWER == {"default": False, "off": set()}
+    skewed = pd.DataFrame({"x": np.r_[np.zeros(80), np.random.default_rng(0).exponential(5, 20)]})
+    (item,), _ = tplan.plan_columns(skewed)
+    assert item["power"] is None and "scaled only" in item["reason"]
+    assert abs(item["skew_before"]) > tplan.SKEW_LIMIT
+
+
+def test_power_switch_per_column(monkeypatch):
+    from src.transform import plan as tplan
+
+    monkeypatch.setitem(tplan.POWER, "default", True)
+    monkeypatch.setitem(tplan.POWER, "off", {"b"})
+    rng = np.random.default_rng(1)
+    df = pd.DataFrame({"a": rng.exponential(5, 300), "b": rng.exponential(5, 300)})
+    plan, _ = tplan.plan_columns(df)
+    by = {p["column"]: p for p in plan}
+    assert by["a"]["power"] in ("log", "yeo-johnson") and by["b"]["power"] is None
+    assert tplan.power_allowed("a") and not tplan.power_allowed("b")

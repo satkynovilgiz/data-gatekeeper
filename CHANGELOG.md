@@ -3,6 +3,27 @@
 All notable changes to Data Gatekeeper. Format based on [Keep a Changelog](https://keepachangelog.com/);
 versions follow the `report_version` of `profiling_report.json`.
 
+## [2.0.0] — 2026-11-26 — Sprint 12: final release (transform by evidence, one-command demo, final docs)
+
+### Changed (behaviour)
+- **Skewed columns are only scaled by default** (`src/transform/plan.py`, `POWER = {"default": False, "off": set()}`).
+  Decided by a rule committed before measuring (`scripts/ablate_power_transform.py`): power transforms stay on only if
+  turning them off hurts LogReg on both Bank and Adult. It hurt Bank (PR-AUC −0.0191, all from `duration`) but helped
+  Adult (+0.0322, from `capital-gain`), and trees were unchanged. Opt back in with `POWER["default"] = True`; per-column
+  `POWER["off"]`. Effect: on Adult the gatekeeper no longer hurts LogReg (ROC-AUC B − A −0.0079 → −0.0002) and its TPR
+  gap for sex is back to raw (0.1053 vs 0.1055); on Bank, LogReg PR-AUC 0.6193 → 0.6004.
+
+### Added
+- `make demo` / `make demo-full` / `scripts/demo.sh` (`--full`, `--fixture`, `--local`): Docker image if installed →
+  downloads with checksums → pipeline on Bank and Adult → two `report.html`. The CI Docker job runs the fixture demo
+  inside the image.
+- The Bank downloader checks a pinned zip SHA-256 and writes `bank_marketing.csv.sha256`.
+- `scripts/check_docs_commands.py`: README / docs commands parsed or run, links, README numbers vs sprint reports,
+  plan status. `scripts/independent_decision_test.py` (UCI Mushroom; SUCCESS by criteria fixed before download).
+- `docs/architecture.md`, `docs/final_presentation.md`, `docs/demo_script.md`, `docs/sprint-12.md`; a new README top
+  section (demo command, screenshot, key results, diagram). The image ships `pipeline_adult.yaml`.
+- Tests 440 → 449.
+
 ## [1.10] — 2026-11-26 — Sprint 11: decisions for a person, HTML report, fairness measurement
 
 ### Added

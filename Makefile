@@ -2,7 +2,7 @@
 # Use another Python with e.g.  make test PYTHON=python3.11
 PYTHON ?= python
 
-.PHONY: help install test lint profile-sample api
+.PHONY: help install test lint profile-sample api demo demo-full
 
 help:            ## show this list
 	@grep -E "^[a-z-]+:.*##" Makefile | sed "s/:.*##/ -/"
@@ -21,3 +21,9 @@ profile-sample:  ## profile the committed 1,000-row bank sample -> results/sampl
 
 api:             ## run the API on http://127.0.0.1:8000 (docs at /docs)
 	$(PYTHON) -m uvicorn src.api.app:app --reload
+
+demo:            ## the final demo: Docker image (if installed), Bank + Adult, two report.html files
+	bash scripts/demo.sh
+
+demo-full:       ## the demo with the impact study on both datasets (about an hour)
+	bash scripts/demo.sh --full

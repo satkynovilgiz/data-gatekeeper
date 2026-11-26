@@ -20,7 +20,7 @@ RUN pip install -r requirements.txt
 
 COPY src/ src/
 COPY contracts/ contracts/
-COPY pipeline.yaml ./
+COPY pipeline.yaml pipeline_adult.yaml ./
 COPY gatekeeper.py run_profiling.py run_cleaning.py run_transform.py run_masking.py ./
 
 # run as a normal user, not root

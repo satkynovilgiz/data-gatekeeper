@@ -1,0 +1,13 @@
+# Demo in --fixture mode (no network): the committed fake-PII customers file (300 rows).
+input: data/raw/customers_pii.csv
+name: customers
+reports_dir: reports/demo
+steps:
+  - profile
+  - clean:
+      imputer: median
+  - mask_pii:
+      actions: {full_name: mask, email: mask}
+  - quality
+  - anomalies:
+      exclude: [churned]

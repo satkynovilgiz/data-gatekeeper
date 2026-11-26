@@ -103,3 +103,9 @@ jobs:
           docker run --rm --user "$(id -u):$(id -g)" -v "$PWD:/work" -w /work data-gatekeeper \
             run --config tests/fixtures/pipeline_ci.yaml --skip impact
           ls reports/run_*/summary.md
+      # Sprint 12: the final demo in --fixture mode (no network) runs the pipelines INSIDE the image
+      - name: demo (fixture mode) inside the image
+        run: |
+          bash scripts/demo.sh --fixture | tee demo.log
+          grep -q "done inside Docker" demo.log
+          test "$(ls reports/demo/run_*/report.html | wc -l)" -eq 2

@@ -9,8 +9,11 @@ Usage:
 
 The full CSV (~5.8 MB) is NOT stored in git (.gitignore). Only the small
 sample is committed so tests and demos work without internet.
+Sprint 12: the zip's SHA-256 is checked (stops on a mismatch) and the CSV's SHA-256 is
+written next to it (bank_marketing.csv.sha256).
 """
 import argparse
+import hashlib
 import io
 import random
 import urllib.request
@@ -18,6 +21,7 @@ import zipfile
 from pathlib import Path
 
 URL = "https://archive.ics.uci.edu/static/public/222/bank+marketing.zip"
+ZIP_SHA256 = "e0bf5f5de5b846e2f18e9d90606637267d46dfa260e0f17bb12e605db5efbeb4"
 INNER_ZIP = "bank-additional.zip"                       # the download is a zip inside a zip
 CSV_IN_ZIP = "bank-additional/bank-additional-full.csv"
 
@@ -32,7 +36,12 @@ def download() -> bytes:
     """Return the raw bytes of bank-additional-full.csv."""
     print(f"Downloading {URL} ...")
     with urllib.request.urlopen(URL, timeout=60) as resp:
-        outer = zipfile.ZipFile(io.BytesIO(resp.read()))
+        data = resp.read()
+    got = hashlib.sha256(data).hexdigest()
+    if got != ZIP_SHA256:
+        raise SystemExit(f"error: SHA-256 mismatch: expected {ZIP_SHA256}, got {got}. The file at "
+                         "the source changed; check it before updating ZIP_SHA256.")
+    outer = zipfile.ZipFile(io.BytesIO(data))
     inner = zipfile.ZipFile(io.BytesIO(outer.read(INNER_ZIP)))
     return inner.read(CSV_IN_ZIP)
 
@@ -48,7 +57,9 @@ def main():
     RAW_DIR.mkdir(parents=True, exist_ok=True)
     data = download()
     FULL_PATH.write_bytes(data)          # kept exactly as published (';' separated)
-    print(f"Saved {FULL_PATH}  ({len(data) / 1e6:.1f} MB)")
+    digest = hashlib.sha256(data).hexdigest()
+    FULL_PATH.with_name(FULL_PATH.name + ".sha256").write_text(f"{digest}  {FULL_PATH.name}\n")
+    print(f"Saved {FULL_PATH}  ({len(data) / 1e6:.1f} MB), SHA-256 {digest}")
 
     if args.sample:
         header, *rows = data.decode("utf-8").splitlines(keepends=True)

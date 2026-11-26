@@ -1,10 +1,20 @@
 # Sprint Plan — Data Gatekeeper (12 sprints, ~1 per week)
 
+> ## ✅ Project complete — v2.0.0
+> | Module | Sprints | What it delivered |
+> |---|---|---|
+> | 1 · Profile | 1–3 | profiler (types, disguised missing, PII hints), quality score, cleaning suggestions, API, JSON Schema |
+> | 2 · Clean | 4–6 | 12 logged cleaning steps, measured ML imputation, outliers, fuzzy duplicates, leak-free transform, PII masking, API |
+> | 3 · Validate | 7–9 | data contracts, drift (PSI + KS), the impact study (A / B / C), robustness, explained anomalies, one validation report |
+> | 4 · Finish | 10–12 | sentinels by frequency, a second dataset, decisions for a person, fairness measurement, HTML report, `POST /run`, transform by evidence, `make demo` |
+>
+> Final presentation: `docs/final_presentation.md` · architecture: `docs/architecture.md` · 449 tests; CI runs pytest, the contract gate and the Docker image on every push.
+
 ```
 Sprints 1–3   Module 1  Profile     -> profiling_report.json
 Sprints 4–6   Module 2  Clean       -> cleaned_data.csv + cleaning_log.json
 Sprints 7–9   Module 3  Validate    -> validation_report.json (contract + drift + anomalies), impact
-Sprints 10–12 Module 4  Finish      -> sentinel-by-frequency, HTML report, POST /run, final demo
+Sprints 10–12 Module 4  Finish      -> decisions, HTML report, POST /run, transform by evidence, make demo
 ```
 
 Status: ✅ done · 🔄 in progress · ⏳ planned
@@ -171,11 +181,15 @@ being imputed, while it is far more robust on dirty data; 407 tests. See `docs/s
 the power transform; cleaning widens LogReg's TPR gap between women and men (0.1055 → 0.1467), not HGB's; 440 tests.
 See `docs/sprint-11.md`.
 
-### Sprint 12 ⏳ — Final demo
-- Carried over: transform default by evidence (power transform on Bank and Adult), a faster imputer that keeps a model per
-  column (pre-set rule + robustness as a second gate)
-- End-to-end demo on both datasets (Docker image, one command, the HTML report as the main deliverable)
-- Final README, architecture diagram, docs check
-- Final presentation + recorded demo
+### Sprint 12 ✅ — Final: transform by evidence, one-command demo, final docs
+- ✅ Transform default by a rule written first: skewed columns are only scaled (power transforms opt-in)
+- ✅ Fairness and robustness re-checked with the final defaults
+- ✅ `make demo` (Docker if installed; locally here), Bank downloader with a checksum, CI runs the demo in the image
+- ✅ `docs/architecture.md`, docs checker, `docs/final_presentation.md`, `docs/demo_script.md`, README top section
+- ✅ Independent test of the decision detector (UCI Mushroom): SUCCESS by criteria written before the download
+- ➡️ Not done (optional): a faster imputer that keeps a model for every column
+- ✅ Release v2.0.0
 
-**Deliverable:** final presentation and a working, documented system.
+**Result:** on Adult the gatekeeper no longer hurts either model (LogReg ROC-AUC B − A −0.0079 → −0.0002) and LogReg's
+TPR gap for sex is back to raw (0.1467 → 0.1053); the cost is Bank LogReg PR-AUC (−0.0191); `make demo` runs both
+datasets in 287 s; 449 tests. See `docs/sprint-12.md`.
