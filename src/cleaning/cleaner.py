@@ -105,9 +105,20 @@ DEFAULT_CONFIG: dict[str, Any] = {
     # hide 10% of known values and score every imputer on them (slower: off by default)
     "evaluate_imputers": False,
     "max_examples": 3,
-    # New rows only (prediction mode, Sprint 9). Codes people use for "no value"; on new
-    # rows they become NaN when the train rows of that column never had them.
+    # New rows only (prediction mode, Sprint 9). Codes people use for "no value"; the
+    # profiler's numeric sentinels found in a train column are added for that column.
     "common_sentinels": [999, 9999, -1, -999],
+    # Sprint 10: a code becomes NaN on new rows when its share there jumps:
+    #     new_share > max(k x train_share, train_share + min_abs)
+    # Chosen once, before any evaluation, and never tuned on it:
+    #   k = 5        "clearly more common than before", not a random wobble. The number of
+    #                rows with a code is roughly Poisson, so a share 5x its usual level
+    #                is very unlikely by chance once the code has a few dozen rows.
+    #   min_abs      for rare codes k alone is not enough: duration = 999 is 2 of 33k train
+    #   = 0.005      rows, so 2-3 of 8k new rows would already be 5x. Also requiring
+    #                +0.5 percentage points (40 rows in an 8k batch) stops that. A very
+    #                common code (pdays 999 = 96%) never triggers: 5 x 96% > 100%.
+    "sentinel_rule": {"k": 5.0, "min_abs": 0.005},
     # What the train rows looked like (learn_from_train()); None when cleaning one file.
     "learned": None,
 }
@@ -164,6 +175,7 @@ class CleaningRun:
     kept_as_category: dict[str, int] = field(default_factory=dict)  # column -> "unknown" cells
     outlier_stats: dict[str, int] = field(default_factory=dict)
     fuzzy: dict[str, Any] = field(default_factory=dict)
+    sentinel_decisions: list[dict] = field(default_factory=list)   # step 8b, per code
 
     def cols(self, etype: str) -> list[str]:
         """Names of the columns whose schema expected_type is etype."""
@@ -576,55 +588,89 @@ def handle_outliers(run: CleaningRun) -> None:
 
 
 def learn_from_train(df: pd.DataFrame, numeric: list[str], sentinels: list[float],
-                     ranges: dict[str, list[float]] | None = None) -> dict:
-    """What new rows are compared with: per numeric column the [min, max] of the (cleaned)
-    train rows, and which common sentinels the train rows really contained.
+                     ranges: dict[str, list[float]] | None = None,
+                     extra_codes: dict[str, list[float]] | None = None) -> dict:
+    """What new rows are compared with, per numeric column of the (cleaned) train rows:
+    its [min, max], and the share of train rows holding each candidate sentinel.
 
+    sentinels: codes checked in every column (config common_sentinels).
+    extra_codes: {column: [codes]} the profiler flagged as numeric sentinels in that column.
     ranges: limits that replace the learned ones (e.g. a contract's min / max).
     """
-    learned: dict[str, dict] = {"ranges": {}, "seen_sentinels": {}}
+    learned: dict[str, dict] = {"ranges": {}, "sentinel_share": {}}
+    rows = len(df)
     for c in numeric:
         if c not in df.columns:
             continue
-        s = pd.to_numeric(df[c], errors="coerce").dropna()
-        if s.empty:
+        s = pd.to_numeric(df[c], errors="coerce")
+        known = s.dropna()
+        if known.empty:
             continue
-        learned["ranges"][c] = [float(s.min()), float(s.max())]
-        learned["seen_sentinels"][c] = [v for v in sentinels if (s == v).any()]
+        learned["ranges"][c] = [float(known.min()), float(known.max())]
+        codes = list(dict.fromkeys([*sentinels, *(extra_codes or {}).get(c, [])]))
+        learned["sentinel_share"][c] = {float(v): float((s == v).sum() / rows) if rows else 0.0
+                                        for v in codes}
     for c, (lo, hi) in (ranges or {}).items():
         if c in learned["ranges"]:
             learned["ranges"][c] = [float(lo), float(hi)]
     return learned
 
 
+def sentinel_jumped(train_share: float, new_share: float, k: float, min_abs: float) -> bool:
+    """The Sprint 10 rule: is a code much more common in the new rows than in train?"""
+    return new_share > max(k * train_share, train_share + min_abs)
+
+
 def out_of_range_to_missing(run: CleaningRun) -> None:
-    """Step 8b (new rows only): values the train rows never had become NaN BEFORE imputing.
+    """Step 8b (new rows only): values that do not fit what the train rows taught -> NaN.
 
     Found by the Sprint 8 robustness test: a 999 in euribor3m (train range 0.6-5.0) stayed
     a number, and the iterative imputer then filled other gaps of that row from it. So:
-      - a number outside the train range (or the contract's min / max) -> NaN
-      - a common sentinel (999, 9999, -1, -999) the train rows of that column never had
-        -> NaN, even inside the range (duration 999 when train never had 999)
-    Does nothing when no train rows were learned (cleaning one file: config learned=None).
+      - a number outside the train range (or the contract's min / max) -> NaN    (Sprint 9)
+      - a sentinel code (999, 9999, -1, -999, + the profiler's codes for that column)
+        whose share in the new rows JUMPED compared with train -> NaN            (Sprint 10)
+        Sprint 9 asked "did train ever have it?"; duration has two real 999s in 41k rows,
+        so injected 999s passed. Now 2 rows in train vs 20% of new rows is a jump.
+    Every code that occurs is logged in run.sentinel_decisions (train share, new share,
+    decision). Does nothing when no train rows were learned (config learned=None).
     Business rules (age 0-120) were already applied by step 8.
     """
     learned = run.config.get("learned")
     if not learned:
         return
+    rule = run.config["sentinel_rule"]
+    rows = len(run.df)
     for c in run.cols("numeric"):
         if c not in learned["ranges"]:
             continue
         s = pd.to_numeric(run.df[c], errors="coerce")
         lo, hi = learned["ranges"][c]
         outside = s.notna() & ((s < lo) | (s > hi))
-        unseen = [v for v in run.config["common_sentinels"]
-                  if v not in learned["seen_sentinels"].get(c, [])]
-        sentinel = s.notna() & s.isin(unseen) & ~outside
+        sentinel = pd.Series(False, index=s.index)
+        jumped = []
+        for code, train_share in learned.get("sentinel_share", {}).get(c, {}).items():
+            hit = s == code
+            n = int(hit.sum())
+            if n == 0:
+                continue
+            new_share = n / rows if rows else 0.0
+            if bool(outside[hit].all()):
+                decision = "missing: outside the train range"
+            elif sentinel_jumped(train_share, new_share, rule["k"], rule["min_abs"]):
+                decision = "missing: share jumped"
+                sentinel |= hit & ~outside
+                jumped.append(code)
+            else:
+                decision = "kept: share as in train"
+            run.sentinel_decisions.append({
+                "column": c, "code": code, "train_share": round(train_share, 6),
+                "new_share": round(new_share, 6), "rows": n, "decision": decision})
         new = s.mask(outside | sentinel)
         run.record("out_of_range_to_missing", c, f"outside the train range [{lo:g}, {hi:g}] -> NaN",
                    outside, run.df[c], new)
-        run.record("out_of_range_to_missing", c, f"sentinel never seen in train "
-                   f"({', '.join(f'{v:g}' for v in unseen)}) -> NaN", sentinel, run.df[c], new)
+        if jumped:
+            run.record("out_of_range_to_missing", c, "sentinel share jumped vs train "
+                       f"({', '.join(f'{v:g}' for v in jumped)}) -> NaN", sentinel, run.df[c], new)
         run.df[c] = new
 
 
