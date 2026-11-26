@@ -283,7 +283,9 @@ def cmd_impact(args: argparse.Namespace) -> int:
         report = run_impact(df, args.target, positive=args.positive, folds=args.folds,
                             robustness=not args.no_robustness, variants=variants,
                             levels=parse_levels(args.levels), dataset=name,
-                            cleaner_config=config)
+                            cleaner_config=config,
+                            fairness=[c.strip() for c in args.fairness.split(",") if c.strip()]
+                            if args.fairness else None)
     except ValueError as e:
         raise InputError(str(e)) from None
     write_impact_report(report, args.reports_dir, name)
@@ -417,6 +419,8 @@ def build_parser() -> argparse.ArgumentParser:
                      help=f"corruption levels for robustness (default {DEFAULT_LEVELS})")
     imp.add_argument("--sample", type=int, help="use N stratified rows (quick runs)")
     imp.add_argument("--decisions", help="YAML with a decisions: block for the cleaner (B, C)")
+    imp.add_argument("--fairness", metavar="COLS",
+                     help="measure group gaps for these columns, e.g. sex,race (no mitigation)")
     imp.add_argument("--variants", default="A,B,C",
                      help="which preparations to compare (default A,B,C; robustness uses A,B)")
     imp.add_argument("--reports-dir", default="reports", help="where the reports go")

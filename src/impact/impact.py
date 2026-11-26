@@ -341,7 +341,8 @@ def run_impact(df: pd.DataFrame, target: str, positive: str | None = None,
                folds: int = FOLDS, seed: int = SEED, models: tuple[str, ...] = MODELS,
                variants: tuple[str, ...] = tuple(VARIANTS), robustness: bool = True,
                levels: tuple[float, ...] = LEVELS, dataset: str = "dataset",
-               cleaner_config: dict | None = None, keep_predictions: bool = False) -> dict:
+               cleaner_config: dict | None = None, keep_predictions: bool = False,
+               fairness: list[str] | None = None) -> dict:
     """Cross-validate A / B / C (and optionally the robustness test) -> report dict.
 
     df is the raw file read as text (read_csv_raw); rows without a target are left out.
@@ -359,6 +360,7 @@ def run_impact(df: pd.DataFrame, target: str, positive: str | None = None,
         v: {m: {k: [] for k in METRICS} for m in models} for v in variants}
     robust_rows: list[dict] = []
     fold_info = []
+    oof = {v: {m: np.full(len(y), np.nan) for m in models} for v in variants}
     # numpy with macOS Accelerate raises false "divide by zero / overflow in matmul" flags
     # inside the models (same as noted in src/cleaning/imputers.py); scores are finite
     with warnings.catch_warnings(), np.errstate(divide="ignore", over="ignore",
@@ -371,7 +373,9 @@ def run_impact(df: pd.DataFrame, target: str, positive: str | None = None,
             fold_info.append(info)
             for v in variants:
                 for m in models:
-                    for metric, value in score(yte, _predict(fm, v, m, Xte)).items():
+                    proba = _predict(fm, v, m, Xte)
+                    oof[v][m][te] = proba                    # out-of-fold, for fairness
+                    for metric, value in score(yte, proba).items():
                         scores[v][m][metric].append(value)
             if robustness:
                 robust_rows += _robustness_fold(fm, Xte, yte, k, seed, levels, models,
@@ -395,6 +399,14 @@ def run_impact(df: pd.DataFrame, target: str, positive: str | None = None,
     }
     if robustness:
         report["robustness"] = _robustness_summary(robust_rows, levels, models)
+    if fairness:
+        from src.impact.fairness import fairness_report
+
+        report["fairness"] = fairness_report(y, oof, X, fairness)
+    if cleaner_config and cleaner_config.get("decisions"):
+        report["decisions"] = cleaner_config["decisions"]
+    if keep_predictions:
+        report["_predictions"] = {"y": y, "oof": oof}      # not written to the JSON
     report["seconds"] = round(time.perf_counter() - start, 1)
     return report
 

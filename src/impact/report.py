@@ -67,6 +67,40 @@ def robustness_table(report: dict, kind: str = "all") -> str:
     return "\n".join(lines)
 
 
+def fairness_tables(report: dict) -> str:
+    """Group tables and gap changes for the fairness section (Sprint 11)."""
+    fair = report["fairness"]
+    parts = [f"Threshold {fair['threshold']}; a group is *small* (flagged, not in the gaps) with "
+             f"fewer than {fair['min_class_rows']} positives or negatives. Measurement only."]
+    for col, block in fair["columns"].items():
+        parts.append(f"\n### {col}")
+        parts.append("| variant | model | group | rows | positive rate | predicted positive "
+                     "(95% CI) | TPR (95% CI) | FPR (95% CI) | ROC-AUC | small |")
+        parts.append("|---|---|---|---|---|---|---|---|---|---|")
+        for v, by_model in block["by_variant"].items():
+            for m, res in by_model.items():
+                for g in res["groups"]:
+                    def r(key: str, g: dict = g) -> str:
+                        ci = g.get(f"{key}_ci")
+                        val = g[key]
+                        return "-" if val is None else (f"{val:.4f}" + (
+                            f" [{ci[0]:.3f}, {ci[1]:.3f}]" if ci else ""))
+                    auc = "-" if g["roc_auc"] is None else f"{g['roc_auc']:.4f}"
+                    parts.append(f"| {v} | {MODEL_NAMES.get(m, m)} | {g['group']} | {g['rows']} | "
+                                 f"{g['positive_rate']:.4f} | {r('predicted_positive_rate')} | "
+                                 f"{r('tpr')} | {r('fpr')} | {auc} | "
+                                 f"{'yes' if g['small'] else ''} |")
+        parts.append("\n| variant | model | gap predicted positive | gap TPR | gap FPR | "
+                     "gap ROC-AUC |\n|---|---|---|---|---|---|")
+        for v, by_model in block["by_variant"].items():
+            for m, res in by_model.items():
+                gp = res["gaps"]
+                cells = ["-" if gp[k] is None else f"{gp[k]:.4f}"
+                         for k in ("predicted_positive_rate", "tpr", "fpr", "roc_auc")]
+                parts.append(f"| {v} | {MODEL_NAMES.get(m, m)} | " + " | ".join(cells) + " |")
+    return "\n".join(parts)
+
+
 def to_markdown(report: dict) -> str:
     """The whole impact report as markdown."""
     parts = [f"# Impact: {report['dataset']} (target `{report['target']}` = "
@@ -74,6 +108,9 @@ def to_markdown(report: dict) -> str:
              f"{report['rows']} rows, {report['folds']}-fold stratified CV, seed {report['seed']}, "
              f"run time {report['seconds']} s.", "", "## Cross-validated metrics (mean ± std)",
              results_table(report), "", "## Paired comparison", comparison_table(report)]
+    if "fairness" in report:
+        parts += ["", "## Fairness measurement (out-of-fold, pooled over folds)",
+                  fairness_tables(report)]
     if "robustness" in report:
         parts += ["", "## Robustness: ROC-AUC on corrupted test folds (all corruption kinds)",
                   robustness_table(report, "all")]
@@ -126,5 +163,6 @@ def write_impact_report(report: dict, out_dir: str | Path, name: str) -> dict:
     path = out / f"{name}_impact.json"
     files["json"] = str(path)
     report["files"] = files
-    path.write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
+    public = {k: v for k, v in report.items() if not k.startswith("_")}
+    path.write_text(json.dumps(public, indent=2) + "\n", encoding="utf-8")
     return files
