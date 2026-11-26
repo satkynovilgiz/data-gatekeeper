@@ -161,6 +161,25 @@ def build_report(run_dir: str | Path) -> str:
                 [_e(r["rule"]), _e(r["column"] or "whole table"), _pill(r["status"]),
                  _e(r["observed"]), _e(r["expected"])] for r in bad]))
 
+    clean_log = _load(run_dir / "clean" / "cleaning_log.json")
+    if clean_log:
+        sm = clean_log["summary"]
+        parts.append("<h2>What cleaning changed</h2>")
+        parts.append(_table(["", "count"], [
+            ["rows before → after", f"{sm['rows_before']} → {sm['rows_after']}"],
+            ["exact duplicate rows removed", sm["duplicates_removed"]],
+            ["hidden missing values found (codes like ?, unknown, 999)",
+             sm["disguised_missing_converted"]],
+            ["empty values filled in (imputed)", sm["values_imputed"]],
+            ["columns added (flags)", ", ".join(sm["columns_added"]) or "none"]], {1}))
+        applied = clean_log.get("decisions") or []
+        if applied:
+            parts.append("<p>How each uncertain value was treated, and who decided:</p>")
+            parts.append(_table(["column", "value", "treated as", "decided by"], [
+                [_e(d["column"]), _e(d["value"]), _e(d["action"].replace("_", " ")),
+                 "a person (config)" if d["set_by"] == "config" else "the default"]
+                for d in applied]))
+
     decisions = _load(run_dir / "decisions.json")
     parts.append("<h2>Decisions for a person</h2>")
     parts.append(_decisions(decisions))
