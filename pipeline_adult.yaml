@@ -1,0 +1,26 @@
+# One-command pipeline for UCI Adult (Sprint 10):  python gatekeeper.py run --config pipeline_adult.yaml
+# Before the first run:  python scripts/download_adult.py --split
+#   (data/raw/adult.csv = train + test; data/demo/adult_train.csv = the reference for drift;
+#    contracts/adult.yaml was drafted from adult_train.csv with `gatekeeper contract init`)
+# sex and race are sensitive attributes: used like any other column, no fairness analysis yet.
+input: data/raw/adult.csv
+name: adult
+reports_dir: reports
+steps:
+  - profile
+  - validate:
+      contract: contracts/adult.yaml
+  - clean:
+      imputer: iterative
+  - mask_pii
+  - quality
+  - anomalies:
+      exclude: [income]           # never use the label
+      top: 10
+  - drift:
+      reference: data/demo/adult_train.csv
+      contract: contracts/adult.yaml
+  - impact:                       # heavy: skip with --skip impact
+      target: income
+      folds: 5
+      robustness: true

@@ -1,0 +1,73 @@
+# Data contract drafted by `gatekeeper contract init` from adult_train.csv.
+# It describes what the reference data looked like: edit it to say what
+# new data MUST look like (tighten or loosen ranges, add regexes, set
+# severity: warn on rules that should not fail a run).
+# Rule forms:  min: 18   or   min: {value: 18, severity: warn}
+contract_version: 1
+dataset: adult_train.csv
+table:
+  min_rows: 3257
+  max_duplicate_rows_pct: {value: 1.0, severity: warn}
+  extra_columns: warn
+columns:
+- {name: age, dtype: integer, required: true, nullable: false, min: 9, max: 98}
+- name: workclass
+  dtype: string
+  required: true
+  nullable: false
+  allowed_values: ['?', Federal-gov, Local-gov, Never-worked, Private, Self-emp-inc, Self-emp-not-inc,
+    State-gov, Without-pay]
+- {name: fnlwgt, dtype: integer, required: true, nullable: false, min: 0, max: 1631947}
+- name: education
+  dtype: string
+  required: true
+  nullable: false
+  allowed_values: [10th, 11th, 12th, 1st-4th, 5th-6th, 7th-8th, 9th, Assoc-acdm, Assoc-voc, Bachelors,
+    Doctorate, HS-grad, Masters, Preschool, Prof-school, Some-college]
+- {name: education-num, dtype: integer, required: true, nullable: false, min: 0, max: 18}
+- name: marital-status
+  dtype: string
+  required: true
+  nullable: false
+  allowed_values: [Divorced, Married-AF-spouse, Married-civ-spouse, Married-spouse-absent, Never-married,
+    Separated, Widowed]
+- name: occupation
+  dtype: string
+  required: true
+  nullable: false
+  allowed_values: ['?', Adm-clerical, Armed-Forces, Craft-repair, Exec-managerial, Farming-fishing, Handlers-cleaners,
+    Machine-op-inspct, Other-service, Priv-house-serv, Prof-specialty, Protective-serv, Sales, Tech-support,
+    Transport-moving]
+- name: relationship
+  dtype: string
+  required: true
+  nullable: false
+  allowed_values: [Husband, Not-in-family, Other-relative, Own-child, Unmarried, Wife]
+- name: race
+  dtype: string
+  required: true
+  nullable: false
+  allowed_values: [Amer-Indian-Eskimo, Asian-Pac-Islander, Black, Other, White]
+- name: sex
+  dtype: string
+  required: true
+  nullable: false
+  allowed_values: [Female, Male]
+- {name: capital-gain, dtype: integer, required: true, nullable: false, min: 0, max: 109999}
+- {name: capital-loss, dtype: integer, required: true, nullable: false, min: 0, max: 4792}
+- {name: hours-per-week, dtype: integer, required: true, nullable: false, min: 0, max: 109}
+- name: native-country
+  dtype: string
+  required: true
+  nullable: false
+  allowed_values: ['?', Cambodia, Canada, China, Columbia, Cuba, Dominican-Republic, Ecuador, El-Salvador,
+    England, France, Germany, Greece, Guatemala, Haiti, Holand-Netherlands, Honduras, Hong, Hungary, India,
+    Iran, Ireland, Italy, Jamaica, Japan, Laos, Mexico, Nicaragua, Outlying-US(Guam-USVI-etc), Peru, Philippines,
+    Poland, Portugal, Puerto-Rico, Scotland, South, Taiwan, Thailand, Trinadad&Tobago, United-States,
+    Vietnam, Yugoslavia]
+- name: income
+  dtype: string
+  required: true
+  nullable: false
+  allowed_values: [<=50K, '>50K']
+drift: {psi_moderate: 0.1, psi_major: 0.25, bins: 10}
