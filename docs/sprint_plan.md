@@ -159,18 +159,22 @@ closing the known gaps and presenting the system.
 on Adult the gatekeeper **hurts** (LogReg ROC-AUC −0.0093, HGB −0.0053), explained by `capital-gain = 99999` and `?`
 being imputed, while it is far more robust on dirty data; 407 tests. See `docs/sprint-10.md`.
 
-### Sprint 11 🔄 — Decisions a person can see + a report people can read
-- 🔄 Decisions for a person: "top code or sentinel?" and "informative missing?" with evidence (label rates),
-  set per column in the contract / config, obeyed and logged by the cleaner; `gatekeeper decisions`
-- 🔄 Faster iterative imputation, chosen by speed AND the Sprint 5 accuracy evaluation
-- 🔄 A first fairness check on Adult (measurement only): group rates and gaps, A vs B
-- 🔄 `gatekeeper report` → one self-contained HTML page; `run` writes it; logging to run.log; `POST /run`
-- 🔄 (if time) LogReg transform ablation on Adult
+### Sprint 11 ✅ — Decisions a person can see + a report people can read
+- ✅ Decisions for a person (`gatekeeper decisions`, `decisions:` in contract / config, obeyed and logged)
+- ✅ Faster imputation measured with a pre-set rule; the winner (`skip_complete`) became an option, not the default,
+  after the robustness check showed its cost on dirty data
+- ✅ First fairness measurement on Adult (sex, race; A vs B; no mitigation)
+- ✅ `report.html` per run, `run.log`, `POST /run`; LogReg transform ablation on Adult
+- ➡️ Moved to Sprint 12: transform default by evidence (power transform), a safe faster imputer
 
-**Deliverable:** a person sees the uncertain decisions and one readable page per run.
+**Result:** Adult with confirmed decisions: HGB B − A −0.0053 → −0.0002 (not an independent test); the remaining LogReg gap is
+the power transform; cleaning widens LogReg's TPR gap between women and men (0.1055 → 0.1467), not HGB's; 440 tests.
+See `docs/sprint-11.md`.
 
 ### Sprint 12 ⏳ — Final demo
-- End-to-end demo on the real dataset (Docker image, one command)
+- Carried over: transform default by evidence (power transform on Bank and Adult), a faster imputer that keeps a model per
+  column (pre-set rule + robustness as a second gate)
+- End-to-end demo on both datasets (Docker image, one command, the HTML report as the main deliverable)
 - Final README, architecture diagram, docs check
 - Final presentation + recorded demo
 

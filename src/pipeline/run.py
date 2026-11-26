@@ -239,8 +239,8 @@ def step_clean(ctx: Context, opts: dict) -> dict:
         config["decisions"] = load_decisions(opts["decisions"])
     if "imputer" in opts:
         method = opts["imputer"]
-        config = {"numeric_strategy": method,
-                  "categorical_strategy": "mode" if method in ("median", "mean") else method}
+        config.update(numeric_strategy=method,          # keeps the decisions loaded above
+                      categorical_strategy="mode" if method in ("median", "mean") else method)
     log = clean_file(ctx.cfg["input"], ctx.out / "clean", report=ctx.profile, config=config)
     ctx.clean_log = log
     ctx.cleaned_path = Path(log["outputs"]["cleaned_data"])
