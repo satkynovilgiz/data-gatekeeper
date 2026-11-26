@@ -36,6 +36,14 @@ ORDINAL_ORDERS = {
 ORDER_MATCH = 0.5        # a known order is used only if >= 50% of the values are in it
 MAX_ONEHOT = 15          # more values than this: rare ones grouped into "infrequent"
 SKEW_LIMIT = 1.0         # |skew| above this counts as skewed (a common rule of thumb)
+# Power transforms for skewed columns (Sprint 12): "default" = use them at all; "off" = columns
+# that are only scaled. Changed only through evidence (scripts/ablate_power_transform.py).
+POWER = {"default": True, "off": set()}
+
+
+def power_allowed(column: str) -> bool:
+    """May this skewed column get log1p / Yeo-Johnson (POWER settings)?"""
+    return bool(POWER["default"]) and column not in POWER["off"]
 OUTLIER_SHARE = 0.05     # more IQR outliers than this -> robust scaler
 SMALL_SCALE = 10         # this many distinct values or fewer -> minmax
 MAX_MISSING = 0.5        # numeric column more empty than this is dropped
@@ -65,7 +73,9 @@ def _numeric_plan(column: str, train: pd.Series, scaler: str | None) -> dict:
     skew = _skew(x)
     power, why = None, [f"skew {skew}"]
     shaped = x
-    if abs(skew) > SKEW_LIMIT:
+    if abs(skew) > SKEW_LIMIT and not power_allowed(column):
+        why.append(f"> {SKEW_LIMIT:g} but power transforms are off for this column -> scaled only")
+    elif abs(skew) > SKEW_LIMIT:
         # try both, keep the more symmetric one (log only works for values >= 0 and
         # only fixes a long RIGHT tail; Yeo-Johnson learns its own curve for any values)
         tries = {}
