@@ -300,14 +300,15 @@ def positive_label(y: pd.Series, positive: str | None = None) -> str:
 
 
 def _fit_fold(Xtr: pd.DataFrame, ytr: np.ndarray, models: tuple[str, ...],
-              variants: tuple[str, ...]) -> tuple[FoldModels, dict]:
+              variants: tuple[str, ...], cleaner_config: dict | None = None
+              ) -> tuple[FoldModels, dict]:
     t0 = time.perf_counter()
     raw = {m: Pipeline([("prep", RawPrep()), ("model", make_model(m))]).fit(Xtr, ytr)
            for m in models} if "A" in variants else {}
     timings = {"A": time.perf_counter() - t0}
 
     t0 = time.perf_counter()
-    cleaner = RowCleaner().fit(Xtr)
+    cleaner = RowCleaner(config=cleaner_config).fit(Xtr)
     ctr = cleaner.transform(Xtr)
     dup = ctr.assign(__label__=ytr).duplicated().to_numpy()      # exact copies, label included
     ctr, ytr_c = ctr[~dup], ytr[~dup]
@@ -339,7 +340,8 @@ def _predict(fm: FoldModels, variant: str, model: str, X: pd.DataFrame) -> np.nd
 def run_impact(df: pd.DataFrame, target: str, positive: str | None = None,
                folds: int = FOLDS, seed: int = SEED, models: tuple[str, ...] = MODELS,
                variants: tuple[str, ...] = tuple(VARIANTS), robustness: bool = True,
-               levels: tuple[float, ...] = LEVELS, dataset: str = "dataset") -> dict:
+               levels: tuple[float, ...] = LEVELS, dataset: str = "dataset",
+               cleaner_config: dict | None = None, keep_predictions: bool = False) -> dict:
     """Cross-validate A / B / C (and optionally the robustness test) -> report dict.
 
     df is the raw file read as text (read_csv_raw); rows without a target are left out.
@@ -364,7 +366,7 @@ def run_impact(df: pd.DataFrame, target: str, positive: str | None = None,
         warnings.simplefilter("ignore", ConvergenceWarning)
         for k, (tr, te) in enumerate(skf.split(X, y)):
             Xtr, Xte, ytr, yte = X.iloc[tr], X.iloc[te], y[tr], y[te]
-            fm, info = _fit_fold(Xtr, ytr, models, variants)
+            fm, info = _fit_fold(Xtr, ytr, models, variants, cleaner_config)
             info.update(fold=k, test_rows=int(len(te)))
             fold_info.append(info)
             for v in variants:

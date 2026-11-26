@@ -49,12 +49,12 @@ ORDER = ("profile", "validate", "clean", "mask_pii", "quality", "anomalies", "dr
 OPTIONS = {
     "profile": set(),
     "validate": {"contract"},
-    "clean": {"imputer"},
+    "clean": {"imputer", "decisions"},
     "mask_pii": {"actions"},
     "quality": set(),
     "anomalies": {"method", "top", "contamination", "exclude", "fail_on_share"},
     "drift": {"reference", "contract", "gate"},
-    "impact": {"target", "folds", "robustness", "positive"},
+    "impact": {"target", "folds", "robustness", "positive", "decisions"},
 }
 REQUIRED = {"validate": {"contract"}, "drift": {"reference"}, "impact": {"target"}}
 TOP_KEYS = {"input", "name", "reports_dir", "steps"}
@@ -218,6 +218,9 @@ def step_clean(ctx: Context, opts: dict) -> dict:
     from src.cleaning.cleaner import clean_file
 
     config = {}
+    if opts.get("decisions"):                      # Sprint 11: a YAML with a decisions: block
+        from src.profiling.decisions import load_decisions
+        config["decisions"] = load_decisions(opts["decisions"])
     if "imputer" in opts:
         method = opts["imputer"]
         config = {"numeric_strategy": method,
@@ -226,8 +229,11 @@ def step_clean(ctx: Context, opts: dict) -> dict:
     ctx.clean_log = log
     ctx.cleaned_path = Path(log["outputs"]["cleaned_data"])
     s = log["summary"]
+    chosen = [f"{d['column']}={d['value']}: {d['action']}" for d in log.get("decisions", [])
+              if d["set_by"] == "config"]
     return {"status": "passed", "files": list(log["outputs"].values()),
             "result": {"rows_before": s["rows_before"], "rows_after": s["rows_after"],
+                       "decisions_from_config": chosen,
                        "duplicates_removed": s["duplicates_removed"],
                        "disguised_missing_converted": s["disguised_missing_converted"],
                        "values_imputed": s["values_imputed"],
@@ -304,9 +310,13 @@ def step_impact(ctx: Context, opts: dict) -> dict:
     from src.impact.impact import run_impact
     from src.impact.report import write_impact_report
 
+    config = None
+    if opts.get("decisions"):
+        from src.profiling.decisions import load_decisions
+        config = {"decisions": load_decisions(opts["decisions"])}
     report = run_impact(ctx.raw, opts["target"], positive=opts.get("positive"),
                         folds=opts.get("folds", 5), robustness=opts.get("robustness", True),
-                        dataset=ctx.cfg["name"])
+                        dataset=ctx.cfg["name"], cleaner_config=config)
     files = write_impact_report(report, ctx.out, ctx.cfg["name"])
     headline = {}
     for m, by_metric in report["comparisons"].get("B-A", {}).items():
@@ -389,7 +399,7 @@ def _short(result: dict | None) -> str:
     parts = []
     for k, v in result.items():
         if isinstance(v, (dict, list)) and k not in ("failed_rules", "major_columns",
-                                                     "top_rows"):
+                                                     "top_rows", "decisions_from_config"):
             continue
         if isinstance(v, list):
             v = "; ".join(map(str, v)) or "none"

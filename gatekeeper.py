@@ -4,6 +4,7 @@
     python gatekeeper.py validate <data.csv> --contract contracts/NAME.yaml
                          [--reference REF.csv] [--anomalies] [--fail-on-anomaly-share X]
     python gatekeeper.py anomalies <data.csv> [--method iforest|zscore|iqr|all] [--top 10]
+    python gatekeeper.py decisions <data.csv> [--target y] [--write decisions.yaml]
     python gatekeeper.py drift <reference.csv> <current.csv> [--contract FILE]
     python gatekeeper.py impact <data.csv> --target y [--folds 5] [--no-robustness]
     python gatekeeper.py run --config pipeline.yaml [--skip impact]
@@ -14,6 +15,7 @@ Exit codes (for CI):
                   more than X of the rows were flagged as anomalies)
               2 = bad contract or bad input (missing / unreadable file, invalid YAML ...)
     anomalies 0 = report written (1 only with --fail-on-anomaly-share), 2 = bad input
+    decisions 0 = table printed (and draft written), 2 = bad input
     drift     0 = no column with major drift, 1 = at least one, 2 = bad input
     contract init: 0 = written, 2 = bad input or the file exists (use --force)
     impact    0 = report written, 2 = bad input
@@ -271,9 +273,17 @@ def cmd_impact(args: argparse.Namespace) -> int:
         variants = tuple(v.strip().upper() for v in args.variants.split(",") if v.strip())
         if not variants or set(variants) - {"A", "B", "C"}:
             raise InputError("--variants: use a comma list of A, B, C")
+        config = None
+        if args.decisions:
+            from src.profiling.decisions import DecisionError, load_decisions
+            try:
+                config = {"decisions": load_decisions(args.decisions)}
+            except DecisionError as e:
+                raise InputError(str(e)) from None
         report = run_impact(df, args.target, positive=args.positive, folds=args.folds,
                             robustness=not args.no_robustness, variants=variants,
-                            levels=parse_levels(args.levels), dataset=name)
+                            levels=parse_levels(args.levels), dataset=name,
+                            cleaner_config=config)
     except ValueError as e:
         raise InputError(str(e)) from None
     write_impact_report(report, args.reports_dir, name)
@@ -312,6 +322,39 @@ def _anomaly_options(p: argparse.ArgumentParser) -> None:
                    help="never use this column (e.g. the label y); repeatable")
     p.add_argument("--fail-on-anomaly-share", type=float, metavar="X",
                    help="exit 1 when more than this share of rows is flagged (e.g. 0.05)")
+
+
+def cmd_decisions(args: argparse.Namespace) -> int:
+    """`decisions`: values the gatekeeper is not sure about, with evidence; draft YAML."""
+    from src.profiling.decisions import decisions_yaml, find_decisions
+    from src.profiling.profiler import profile_dataset
+
+    df = read_data(args.csv)
+    try:
+        found = find_decisions(df, profile_dataset(df, Path(args.csv).name), target=args.target,
+                               positive=args.positive)
+    except ValueError as e:
+        raise InputError(str(e)) from None
+
+    def pct(v: float | None) -> str:
+        return "-" if v is None else f"{v:.2%}"
+    print(table([[d["column"], d["value"], d["kind"], str(d["rows"]), pct(d["label_rate_in"]),
+                  pct(d["label_rate_rest"]), "-" if d["p_value"] is None else f"{d['p_value']:.1e}",
+                  d["current_default"], d["recommended"] or "a person decides"] for d in found],
+                ["column", "value", "kind", "rows", "label in", "label rest", "p", "today",
+                 "recommended"]))
+    if not found:
+        print("No decisions needed: every code the profiler found is handled by its default.")
+    if args.target is None:
+        print("\nNo --target: counts only. With a target the label rates show which codes matter.")
+    if args.write:
+        out = Path(args.write)
+        if out.exists() and not args.force:
+            raise InputError(f"{out} already exists (use --force to overwrite)")
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_text(decisions_yaml(found, Path(args.csv).name), encoding="utf-8")
+        print(f"\nDraft decisions -> {out} (a person must confirm them)")
+    return EXIT_OK
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -373,10 +416,19 @@ def build_parser() -> argparse.ArgumentParser:
     imp.add_argument("--levels", default=DEFAULT_LEVELS,
                      help=f"corruption levels for robustness (default {DEFAULT_LEVELS})")
     imp.add_argument("--sample", type=int, help="use N stratified rows (quick runs)")
+    imp.add_argument("--decisions", help="YAML with a decisions: block for the cleaner (B, C)")
     imp.add_argument("--variants", default="A,B,C",
                      help="which preparations to compare (default A,B,C; robustness uses A,B)")
     imp.add_argument("--reports-dir", default="reports", help="where the reports go")
     imp.set_defaults(func=cmd_impact)
+
+    dec = sub.add_parser("decisions", help="values the gatekeeper is not sure about")
+    dec.add_argument("csv", help="dataset (CSV)")
+    dec.add_argument("--target", help="label column: adds label rates as evidence")
+    dec.add_argument("--positive", help="positive class (default: yes / 1 / the rarest)")
+    dec.add_argument("--write", metavar="FILE", help="write a draft decisions: block (YAML)")
+    dec.add_argument("--force", action="store_true", help="overwrite --write FILE")
+    dec.set_defaults(func=cmd_decisions)
 
     run = sub.add_parser("run", help="run the steps of a pipeline YAML in order")
     run.add_argument("--config", required=True, help="pipeline YAML, e.g. pipeline.yaml")

@@ -44,7 +44,8 @@ COLUMN_KEYS = {"name", "severity", "pii", "description", *COLUMN_RULES}
 TABLE_RULES = ("min_rows", "max_duplicate_rows_pct")
 TABLE_KEYS = {*TABLE_RULES, "extra_columns"}
 DRIFT_DEFAULTS = {"psi_moderate": 0.1, "psi_major": 0.25, "bins": 10}
-TOP_KEYS = {"contract_version", "dataset", "description", "table", "columns", "drift"}
+TOP_KEYS = {"contract_version", "dataset", "description", "table", "columns", "drift",
+            "decisions"}
 
 BOOL_WORDS = {"true", "false", "yes", "no", "y", "n", "t", "f", "1", "0"}
 INTEGER = re.compile(r"^[+-]?\d+(\.0+)?$")
@@ -214,8 +215,14 @@ def parse_contract(raw: Any, source: str = "contract") -> dict:
             or not 2 <= drift["bins"] <= 100:
         raise ContractError("drift: bins must be a whole number from 2 to 100")
 
+    # Sprint 11: decisions a person confirmed for the cleaner (src/profiling/decisions.py)
+    from src.profiling.decisions import DecisionError, normalise_decisions
+    try:
+        decisions = normalise_decisions(raw.get("decisions"), source=f"{source}: decisions")
+    except DecisionError as e:
+        raise ContractError(str(e)) from None
     return {"dataset": raw.get("dataset"), "columns": columns, "table": table,
-            "extra_columns": extra, "drift": drift}
+            "extra_columns": extra, "drift": drift, "decisions": decisions}
 
 
 def load_contract(path: str | Path) -> dict:
