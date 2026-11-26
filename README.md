@@ -4,8 +4,41 @@
 [![Python 3.11](https://img.shields.io/badge/python-3.11-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 
-A backend engine that **profiles, cleans, and validates** any dataset before it is used.
-CadetX AI Engineering & Data Science internship project (12 sprints, see [`docs/sprint_plan.md`](docs/sprint_plan.md)).
+**Data Gatekeeper checks a CSV before anyone uses it:** it profiles it, checks it against a contract, cleans it with
+every change logged, lists the values only a person can judge, finds unusual rows and drift, measures whether cleaning
+helps a model, and writes one HTML page a non-technical reader can open.
+CadetX AI Engineering & Data Science internship project, 12 sprints, v2.0.0 ([`docs/sprint_plan.md`](docs/sprint_plan.md)).
+
+### The demo, in one command
+```bash
+make demo          # Docker image (if installed) -> download Bank + Adult (checksums) -> pipeline on both -> 2 reports
+make demo-full     # the same, plus the impact study (about an hour)
+```
+![report.html of the demo](docs/figures/report_demo.png)
+
+### Key results (real numbers, each from its sprint report)
+| Sprint | Question | Answer |
+|---|---|---|
+| [8](docs/sprint-08.md) | Does cleaning help a model on Bank Marketing? | No ROC-AUC gain (LogReg −0.0002, HGB +0.0001, CIs include 0); LogReg PR-AUC +0.0197 |
+| [9](docs/sprint-09.md) | Can unseen `999` codes fool the cleaner? | Yes, until fixed: HGB with 20% mixed corruption 0.6368 → 0.7508 |
+| [10](docs/sprint-10.md) | Does the fix hold, and on a second, messier dataset? | Sentinels by frequency: 0.8498 → 0.9141. On UCI Adult cleaning **hurt** (LogReg −0.0093, HGB −0.0053) |
+| [11](docs/sprint-11.md) | Can a person's decisions undo that? Is it fair? | HGB gap −0.0053 → −0.0002 with 3 confirmed decisions; LogReg TPR gap women vs men 0.1055 → 0.1467 |
+| [12](docs/sprint-12.md) | Should skewed columns get a power transform? | Decided by a rule written first: scale only (Adult LogReg gap closed; Bank LogReg PR-AUC −0.0191) |
+
+### How it fits together
+```mermaid
+flowchart LR
+    CSV[/CSV/] --> P[profile] --> D[decisions] --> V{contract}
+    V -- fail --> STOP[exit 1]
+    V -- pass --> C[clean + PII] --> Q[quality] --> A[anomalies] --> DR[drift] --> I[impact]
+    I --> R[report.html / summary.json / run.log]
+    STOP --> R
+```
+Entry points: `gatekeeper.py` (CLI), `gatekeeper run --config pipeline.yaml`, the FastAPI app, Docker.
+Details: [`docs/architecture.md`](docs/architecture.md) · presentation: [`docs/final_presentation.md`](docs/final_presentation.md)
+· demo video script: [`docs/demo_script.md`](docs/demo_script.md).
+
+---
 
 ```
 raw.csv ──► Module 1: Profile ──► Module 2: Clean ──► Module 3: Validate ──► Module 4: Automate
