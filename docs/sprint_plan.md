@@ -171,11 +171,14 @@ being imputed, while it is far more robust on dirty data; 407 tests. See `docs/s
 the power transform; cleaning widens LogReg's TPR gap between women and men (0.1055 → 0.1467), not HGB's; 440 tests.
 See `docs/sprint-11.md`.
 
-### Sprint 12 ⏳ — Final demo
-- Carried over: transform default by evidence (power transform on Bank and Adult), a faster imputer that keeps a model per
-  column (pre-set rule + robustness as a second gate)
-- End-to-end demo on both datasets (Docker image, one command, the HTML report as the main deliverable)
-- Final README, architecture diagram, docs check
-- Final presentation + recorded demo
+### Sprint 12 🔄 — Final: transform by evidence, one-command demo, final docs
+- 🔄 Transform default by evidence: power-transform ablation on Bank and Adult with a rule written before measuring;
+  fairness and robustness re-checked with the final defaults
+- 🔄 `make demo`: Docker image → download Bank + Adult (checksums) → pipeline on both → two report.html files
+- 🔄 Final docs: README top section, `docs/architecture.md`, docs check (`scripts/check_docs_commands.py`),
+  `docs/final_presentation.md`, `docs/demo_script.md`
+- 🔄 (optional) faster imputation with the robustness study as a second gate; an independent test of the decision
+  detector on a new dataset
+- 🔄 Release v2.0.0
 
 **Deliverable:** final presentation and a working, documented system.
