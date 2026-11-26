@@ -37,12 +37,13 @@ METHODS = ("median", "mean", "mode", *ML_METHODS)
 KNN_NEIGHBOURS = 5
 ITERATIVE_ROUNDS = 10
 # How IterativeImputer runs: the default the cleaner, the pipeline and the impact study use.
-# Sprint 11 (scripts/evaluate_imputer_speed.py, rule fixed before measuring): skip_complete=True
-# = no model for columns that have no gaps in the rows it learns from. Same hidden-10% accuracy
-# on Bank and Adult, fit 2.3-2.5x faster (Adult fold 349.8 s -> 140.5 s). Caveat: a column that
-# had no gaps in training but has gaps in NEW rows is then filled with its mean (the imputer's
-# initial fill), not by the model; measured in docs/sprint-11.md.
-ITERATIVE = {"max_iter": ITERATIVE_ROUNDS, "skip_complete": True, "n_nearest_features": None}
+# Sprint 11 measured faster settings (scripts/evaluate_imputer_speed.py, rule fixed before
+# measuring). The rule picked skip_complete=True (same hidden-10% accuracy, Adult fold fit
+# 349.8 s -> 140.5 s), but that evaluation cannot see one case: a column with no gaps in
+# training gets NO model, so a gap in a NEW row is filled with the training mean. The Bank
+# robustness study then showed the cost (HGB, all corruption at 20%: 0.8126 -> 0.7590), so the
+# default stays skip_complete=False. Set ITERATIVE["skip_complete"] = True for speed on clean data.
+ITERATIVE = {"max_iter": ITERATIVE_ROUNDS, "skip_complete": False, "n_nearest_features": None}
 
 
 def make_iterative(settings: dict | None = None) -> IterativeImputer:
