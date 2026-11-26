@@ -3,6 +3,33 @@
 All notable changes to Data Gatekeeper. Format based on [Keep a Changelog](https://keepachangelog.com/);
 versions follow the `report_version` of `profiling_report.json`.
 
+## [1.10] — 2026-11-26 — Sprint 11: decisions for a person, HTML report, fairness measurement
+
+### Added
+- **Decisions for a person** (`src/profiling/decisions.py`, `gatekeeper decisions [--target] [--write]`): "top code or
+  sentinel?" and "informative missing?" with counts, label rates in vs rest and a two-proportion test ("clearly
+  different" = > 5 points, p < 0.01, ≥ 30 rows; fixed before any run). A `decisions:` block in a contract or config
+  (`keep_as_value`, `treat_as_missing`, `keep_as_category`, `impute`) is obeyed by the cleaner and logged with
+  `set_by: default | config`. `contracts/adult_decisions.yaml`. Options `decisions` for the pipeline's clean / impact
+  steps and `impact --decisions`.
+- **Fairness measurement** (`src/impact/fairness.py`, `impact --fairness sex,race`): out-of-fold group rates, TPR, FPR,
+  ROC-AUC, Wilson intervals, small-group flags, gaps A vs B. Measurement only.
+- **HTML report** (`src/pipeline/html.py`, `gatekeeper report`), written by every `gatekeeper run`; **logging** to the
+  console and `run.log`; the profile step writes `decisions.json`.
+- **API**: `POST /run` (CSV + JSON config, 120 s limit) and `GET /runs/{id}/report.html`.
+- `src/cleaning/imputers.py`: `ITERATIVE` settings and `make_iterative()`; `skip_complete` available as an option.
+- Scripts: `evaluate_imputer_speed.py` (rule fixed before measuring), `ablate_adult_transform.py`.
+- `docs/sprint-11.md`, `docs/figures/report_adult.png`. Tests 407 → 440.
+
+### Fixed
+- The pipeline's clean step dropped the confirmed decisions when an `imputer` option was also set.
+
+### Not changed (on purpose)
+- The iterative imputer default: the pre-set rule picked `skip_complete` (same in-table accuracy, Adult fold 349.8 s →
+  140.5 s), but the Bank robustness study showed its cost on dirty new rows (HGB, all kinds 20%: 0.8126 → 0.7590).
+- The transform default: the Adult ablation shows the power transform causes LogReg's remaining gap
+  (C − A −0.0079 → −0.0002 without it); it needs a second dataset before a change.
+
 ## [1.9] — 2026-11-26 — Sprint 10: close the known gaps (sentinels by frequency, anomalies, UCI Adult)
 
 ### Changed
