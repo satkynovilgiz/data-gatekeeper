@@ -245,6 +245,43 @@ Keeping both closes the gap for HistGradientBoosting. On dirty incoming data the
 (Bank, HGB, 20% sentinels: 0.8498 → 0.9141), and the new `zscore_mixture` anomaly method lifts precision@k from
 0.10 to 0.59. Details: [`docs/sprint-10.md`](docs/sprint-10.md), dataset: [`docs/dataset.md`](docs/dataset.md).
 
+## Decisions for a person (Sprint 11)
+Some values only a person can judge: is `capital-gain = 99999` a "no value" code or a real (capped) amount?
+Is `workclass = ?` just missing, or does "no answer" mean something? The gatekeeper now **lists** them with evidence
+instead of deciding alone:
+```bash
+python gatekeeper.py decisions data/raw/adult.csv --target income --write draft.yaml
+```
+| column | value | rows | `>50K` in these rows vs the rest | today | recommended |
+|---|---|---|---|---|---|
+| capital-gain | 99999 | 244 | 100.00% vs 23.55% | treat as missing | **keep as value** |
+| workclass | ? | 2,799 | 9.47% vs 24.81% | impute | **keep as category** |
+| occupation | ? | 2,809 | 9.43% vs 24.81% | impute | **keep as category** |
+
+A person confirms them in a `decisions:` block (contract or config, e.g.
+[`contracts/adult_decisions.yaml`](contracts/adult_decisions.yaml)). The cleaner obeys it, and the cleaning log says who
+decided (default or config). On Adult this removed the damage Sprint 10 found for HistGradientBoosting
+(ROC-AUC B − A −0.0053 → −0.0002, no clear difference). It is not an independent test, because the decisions were
+informed by Sprint 10's ablation. On Bank the detector lists only `pdays = 999` (kept as the Sprint 4 special code) and
+`default = unknown` (already a category). A first fairness measurement on Adult and the details are in
+[`docs/sprint-11.md`](docs/sprint-11.md).
+
+## HTML report (Sprint 11)
+Every `gatekeeper run` writes `report.html` (and `run.log`) into its run folder: one self-contained page (no external
+requests, prints well, no personal data) with the status in plain words, the steps, contract results, what cleaning
+changed and who decided, the decisions for a person, quality before/after (with the warning that a higher score is not
+a better model), the most unusual rows with reasons, drift, and the impact headline.
+```bash
+python gatekeeper.py run --config pipeline_adult.yaml --skip impact     # -> reports/run_<time>/report.html
+python gatekeeper.py report reports/run_<time>                          # rebuild the page
+curl -F file=@data.csv -F config=@config.json "http://127.0.0.1:8000/run?output=html" > report.html
+```
+`POST /run` takes a CSV plus a small JSON config (`{"steps": ["profile", {"validate": {"contract": "example"}},
+"clean", "quality", "anomalies"]}`). The same upload limits apply, it has a 120-second time limit, and it does not run
+`drift` or `impact` (they need server files or take minutes). It returns the summary and a link to the page.
+
+![HTML report](docs/figures/report_adult.png)
+
 ## Project structure
 
 ```
@@ -254,7 +291,7 @@ data-gatekeeper/
 ├── scripts/                  # dataset download, sample data (HR + fake PII customers), charts
 ├── src/
 │   ├── api/
-│   │   ├── app.py            #   FastAPI: /health /profile /clean /transform /mask-pii /validate /drift /anomalies
+│   │   ├── app.py            #   FastAPI: /health /profile /clean /transform /mask-pii /validate /drift /anomalies /run
 │   │   └── profiling_api.py  #   old Sprint 2 entry point (imports app.py)
 │   ├── profiling/            # Module 1
 │   │   ├── semantic.py       #   type + meaning detection (email, phone, card, IP, DOB, id, PII)
@@ -278,7 +315,7 @@ data-gatekeeper/
 │   │   └── mask.py           #   mask / salted hash / drop / generalize + PII report
 │   ├── validation/           # Module 3: contract.py, drift.py, anomaly.py, report.py (validation_report.json)
 │   ├── impact/               # Sprint 8: impact.py (A/B/C CV), corruption.py, report.py
-│   └── pipeline/             # Sprint 8: run.py (gatekeeper run --config)
+│   └── pipeline/             # run.py (gatekeeper run --config), html.py (report.html, Sprint 11)
 ├── tests/                    # pytest
 ├── run_profiling.py          # Module 1 CLI
 ├── run_cleaning.py           # Module 2 CLI: clean
