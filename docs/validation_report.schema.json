@@ -127,13 +127,14 @@
         {"type": "null"},
         {
           "type": "object",
-          "required": ["rows", "fitted_on", "features", "excluded", "contamination", "settings",
-                       "prepare_seconds", "methods"],
+          "required": ["rows", "fitted_on", "features", "categorical_features", "excluded",
+                       "contamination", "settings", "prepare_seconds", "methods"],
           "additionalProperties": false,
           "properties": {
             "rows": {"type": "integer", "minimum": 0},
             "fitted_on": {"enum": ["reference", "this file"]},
             "features": {"type": "array", "items": {"type": "string"}, "minItems": 1},
+            "categorical_features": {"type": "array", "items": {"type": "string"}},
             "excluded": {"type": "object", "additionalProperties": {"type": "string"}},
             "contamination": {"type": "number", "exclusiveMinimum": 0, "exclusiveMaximum": 0.5},
             "settings": {"type": "object"},
@@ -160,7 +161,7 @@
     }
   },
   "$defs": {
-    "method": {"enum": ["iforest", "zscore", "iqr"]},
+    "method": {"enum": ["iforest", "zscore", "iqr", "zscore_mixture", "iforest_with_categories"]},
     "share": {"type": "number", "minimum": 0, "maximum": 1},
     "anomaly_row": {
       "type": "object",
@@ -179,9 +180,12 @@
             "additionalProperties": false,
             "properties": {
               "column": {"type": "string"},
-              "value": {"type": ["number", "null"]},
-              "median": {"type": ["number", "null"]},
+              "value": {"type": ["number", "string", "null"],
+                        "description": "a string for a categorical column"},
+              "median": {"type": ["number", "string", "null"],
+                         "description": "for a categorical column: its most common category"},
               "robust_z": {"type": ["number", "null"], "minimum": 0},
+              "mixture_z": {"type": ["number", "null"], "minimum": 0},
               "contribution": {"type": "number"}
             }
           }
