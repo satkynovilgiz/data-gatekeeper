@@ -53,6 +53,7 @@ from src.cleaning.cleaner import (
     ROW_STEPS,
     CleaningRun,
     _strategy,
+    apply_decisions,
     feature_columns,
     learn_from_train,
 )
@@ -172,6 +173,7 @@ class RowCleaner:
         self.config_ = {**DEFAULT_CONFIG, **(self.config or {}), "learned": None}
         report = profile_dataset(X, dataset_name="train_fold")
         self.schema_ = infer_schema(X, report)
+        self.decisions_log_ = apply_decisions(self.schema_, self.config_)   # Sprint 11
         self.suggestions_ = report.get("cleaning_suggestions", [])
         run = self._run(X)                       # learned=None: step 8b does nothing here
         self.columns_ = list(run.df.columns)
