@@ -159,14 +159,15 @@ closing the known gaps and presenting the system.
 on Adult the gatekeeper **hurts** (LogReg ROC-AUC −0.0093, HGB −0.0053), explained by `capital-gain = 99999` and `?`
 being imputed, while it is far more robust on dirty data; 407 tests. See `docs/sprint-10.md`.
 
-### Sprint 11 ⏳ — Reports people can read + full API
-- Carried over from Sprint 10: show "top code vs sentinel" and informative `?` columns as decisions for a person
-  (contract / config), faster iterative imputation, a first fairness check on Adult
-- One-page HTML report from `validation_report.json` + `summary.json` (moved here from Sprint 3)
-- `POST /run`: the whole pipeline over HTTP; Python `logging` to console + file for `gatekeeper run`
-- Faster iterative imputation on big files (carried over since Sprint 6)
+### Sprint 11 🔄 — Decisions a person can see + a report people can read
+- 🔄 Decisions for a person: "top code or sentinel?" and "informative missing?" with evidence (label rates),
+  set per column in the contract / config, obeyed and logged by the cleaner; `gatekeeper decisions`
+- 🔄 Faster iterative imputation, chosen by speed AND the Sprint 5 accuracy evaluation
+- 🔄 A first fairness check on Adult (measurement only): group rates and gaps, A vs B
+- 🔄 `gatekeeper report` → one self-contained HTML page; `run` writes it; logging to run.log; `POST /run`
+- 🔄 (if time) LogReg transform ablation on Adult
 
-**Deliverable:** a non-technical reader can open one HTML page per run.
+**Deliverable:** a person sees the uncertain decisions and one readable page per run.
 
 ### Sprint 12 ⏳ — Final demo
 - End-to-end demo on the real dataset (Docker image, one command)
