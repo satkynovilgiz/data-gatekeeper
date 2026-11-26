@@ -16,7 +16,10 @@ Candidates: skip_complete=True; n_nearest_features=15; max_iter=5; skip_complete
 Not tried: frequency / ordinal encoding of high-cardinality categories (native-country is
 itself an imputation target, and a frequency code cannot be turned back into a country).
 Adult uses contracts/adult_decisions.yaml (the Sprint 11 setup). Writes reports/imputer_speed.json.
+`--table` prints the table again from that JSON without re-measuring.
 """
+from __future__ import annotations
+
 import json
 import sys
 import time
@@ -99,6 +102,12 @@ def main() -> None:
            "winner": winner}
     (ROOT / "reports").mkdir(exist_ok=True)
     (ROOT / "reports/imputer_speed.json").write_text(json.dumps(out, indent=2) + "\n")
+    print_table(out)
+
+
+def print_table(out: dict) -> None:
+    """The markdown table and the winner from a result dict."""
+    results, acceptable, winner = out["results"], out["acceptable"], out["winner"]
     print("\n| setting | Bank fit s | Bank NRMSE | Bank accuracy | Adult fit s | Adult NRMSE | "
           "Adult accuracy | acceptable |")
     print("|---|---|---|---|---|---|---|---|")
@@ -115,4 +124,7 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    if "--table" in sys.argv:
+        print_table(json.loads((ROOT / "reports/imputer_speed.json").read_text()))
+    else:
+        main()
