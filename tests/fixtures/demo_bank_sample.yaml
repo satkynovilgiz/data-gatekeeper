@@ -1,0 +1,12 @@
+# Demo in --fixture mode (no network): the committed 1,000-row Bank sample.
+input: data/raw/bank_marketing_sample.csv
+name: bank_sample
+reports_dir: reports/demo
+steps:
+  - profile
+  - clean:
+      imputer: median
+  - mask_pii
+  - quality
+  - anomalies:
+      exclude: [y]
