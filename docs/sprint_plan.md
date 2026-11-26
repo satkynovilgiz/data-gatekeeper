@@ -146,14 +146,22 @@ See `docs/sprint-09.md` and `docs/module3_presentation.md`.
 The one-command pipeline, YAML config, Docker and CI were pulled forward into Sprints 7–8, so Module 4 is about
 closing the known gaps and presenting the system.
 
-### Sprint 10 ⏳ — Close the known gaps
-- Sentinel rule by frequency (a code's share in new rows vs. its train share), then re-run the robustness study
-- Categories in the anomaly forest (frequency / one-hot encoding); a mixture-aware z for bimodal columns
-- The impact study on a second, messier dataset (e.g. the HR sample scaled up, or another public dataset)
+### Sprint 10 ✅ — Close the known gaps
+- ✅ Sentinel rule by frequency (`new_share > max(5 × train_share, train_share + 0.005)`), logged per code;
+  robustness re-run Sprint 8 → 9 → 10
+- ✅ `zscore_mixture` (1–3 bumps by BIC) and `iforest_with_categories` next to the Sprint 9 methods
+- ✅ UCI Adult: downloader with a pinned checksum, contract, pipeline, impact + robustness, ablation
+- ✅ Fixed: the Bank ordinal order for `education` wiped out Adult's `education`
+- ➡️ Moved to Sprint 11: top codes vs sentinels and informative `?` made visible as decisions; faster iterative
+  imputation; a first fairness check on Adult; transform ablation for LogReg on Adult
 
-**Deliverable:** the Sprint 9 limitations fixed or measured on a second dataset.
+**Result:** HGB sentinels 20% 0.8264 → 0.9141, clean data unchanged; anomaly precision@k 0.10 → 0.59 (mixture z);
+on Adult the gatekeeper **hurts** (LogReg ROC-AUC −0.0093, HGB −0.0053), explained by `capital-gain = 99999` and `?`
+being imputed, while it is far more robust on dirty data; 407 tests. See `docs/sprint-10.md`.
 
 ### Sprint 11 ⏳ — Reports people can read + full API
+- Carried over from Sprint 10: show "top code vs sentinel" and informative `?` columns as decisions for a person
+  (contract / config), faster iterative imputation, a first fairness check on Adult
 - One-page HTML report from `validation_report.json` + `summary.json` (moved here from Sprint 3)
 - `POST /run`: the whole pipeline over HTTP; Python `logging` to console + file for `gatekeeper run`
 - Faster iterative imputation on big files (carried over since Sprint 6)

@@ -5,6 +5,10 @@
 SETTINGS, FIXED BEFORE THE FIRST RUN (committed before any result existed; never tuned):
   - methods with their defaults: iforest (100 trees, seed 42, contamination 0.01),
     zscore (robust z, MAD = 0 columns unused), iqr (fences 1.5 x IQR)
+  - Sprint 10 adds, with settings fixed in src/validation/anomaly.py before its first run:
+    zscore_mixture (1-3 Gaussian bumps per column by BIC, seed 42, bump SD >= 0.1 x scale,
+    flag at 3.5) and iforest_with_categories (frequency encoding, same forest settings).
+    The planted data (scripts/make_anomaly_demo.py, seed 42) is the Sprint 9 file, unchanged.
   - features chosen by src/validation/anomaly.py (label y excluded), fitted on the file itself
   - overall: k = number of planted rows (412); per kind: the normal rows + that kind's rows,
     k = that kind's count; precision@k, recall@k, ROC-AUC, PR-AUC

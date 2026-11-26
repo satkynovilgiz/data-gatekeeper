@@ -177,9 +177,17 @@ class RowCleaner:
         self.columns_ = list(run.df.columns)
         self.impute_features_ = feature_columns(run)
         self.impute_targets_ = [c for c in run.df.columns if _strategy(run, c) != "none"]
+        # the profiler's numeric sentinels per column (e.g. pdays 999) are candidates too
+        extra = {}
+        for c, col in self.schema_["columns"].items():
+            codes = pd.to_numeric(pd.Series(col.get("missing_codes", []), dtype=object),
+                                  errors="coerce").dropna()
+            if len(codes):
+                extra[c] = [float(v) for v in codes]
         self.config_["learned"] = learn_from_train(
-            run.df, run.cols("numeric"), self.config_["common_sentinels"], self.ranges)
+            run.df, run.cols("numeric"), self.config_["common_sentinels"], self.ranges, extra)
         self.out_of_range_ = {}
+        self.sentinel_log_ = []
         return self
 
     def transform(self, X: pd.DataFrame) -> pd.DataFrame:
@@ -188,6 +196,7 @@ class RowCleaner:
         out_of_range_ = {column: cells set to NaN by step 8b} for this call.
         """
         run = self._run(X)
+        self.sentinel_log_ = list(run.sentinel_decisions)       # code, shares, decision
         self.out_of_range_ = {}
         for st in run.steps:
             if st["step"] == "out_of_range_to_missing":

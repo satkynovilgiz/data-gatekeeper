@@ -3,7 +3,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from src.cleaning.cleaner import DEFAULT_CONFIG, clean_dataset, learn_from_train
+from src.cleaning.cleaner import DEFAULT_CONFIG, clean_dataset, learn_from_train, sentinel_jumped
 from src.cleaning.imputers import FoldImputer
 from src.impact.impact import RowCleaner
 from src.profiling.profiler import profile_dataset
@@ -22,11 +22,12 @@ def train():
     })
 
 
-def test_learn_from_train_ranges_and_seen_sentinels():
-    df = pd.DataFrame({"x": [1.0, 5.0, -1.0], "y": [10.0, 999.0, 20.0]})
-    learned = learn_from_train(df, ["x", "y"], [999, -1])
+def test_learn_from_train_ranges_and_sentinel_shares():
+    df = pd.DataFrame({"x": [1.0, 5.0, -1.0, 2.0], "y": [10.0, 999.0, 20.0, np.nan]})
+    learned = learn_from_train(df, ["x", "y"], [999, -1], extra_codes={"y": [9999]})
     assert learned["ranges"] == {"x": [-1.0, 5.0], "y": [10.0, 999.0]}
-    assert learned["seen_sentinels"] == {"x": [-1], "y": [999]}
+    assert learned["sentinel_share"]["x"] == {999.0: 0.0, -1.0: 0.25}
+    assert learned["sentinel_share"]["y"] == {999.0: 0.25, -1.0: 0.0, 9999.0: 0.0}
     over = learn_from_train(df, ["x"], [999], ranges={"x": [0, 3]})
     assert over["ranges"]["x"] == [0.0, 3.0]
 
@@ -54,8 +55,63 @@ def test_unseen_sentinel_inside_the_range_becomes_missing():
     cleaner = RowCleaner().fit(train)
     out = cleaner.transform(pd.DataFrame({"duration": ["999", "1000", "998"]}))
     assert out["duration"].isna().tolist() == [True, False, False]   # only the sentinel
-    seen = RowCleaner().fit(pd.DataFrame({"duration": ["999"] + train["duration"].tolist()}))
-    assert seen.transform(pd.DataFrame({"duration": ["999"]}))["duration"].notna().all()
+
+
+# ------------------------------------------------- Sprint 10: the frequency rule
+def _duration_train(n_999: int, rows: int = 2000) -> pd.DataFrame:
+    values = [str(v % 900 + 1) for v in range(rows - n_999)] + ["999"] * n_999   # 1..900
+    return pd.DataFrame({"duration": values})
+
+
+def test_rule_formula():
+    assert sentinel_jumped(0.0, 0.006, 5, 0.005)                  # 0 -> 0.6%: jumped
+    assert not sentinel_jumped(0.0, 0.004, 5, 0.005)              # below the +0.5 points
+    assert not sentinel_jumped(0.10, 0.40, 5, 0.005)             # 4x: not 5x
+    assert sentinel_jumped(0.10, 0.51, 5, 0.005)
+    assert not sentinel_jumped(0.96, 1.0, 5, 0.005)               # a very common code never
+
+
+def test_code_common_in_train_is_kept():
+    # 999 is 10% of train rows (a real, frequent value); new rows have it about as often
+    cleaner = RowCleaner().fit(_duration_train(200))
+    new = pd.DataFrame({"duration": ["999"] * 12 + [str(v) for v in range(1, 89)]})   # 12%
+    out = cleaner.transform(new)
+    assert (out["duration"] == 999).sum() == 12
+    log = [d for d in cleaner.sentinel_log_ if d["column"] == "duration" and d["code"] == 999]
+    assert log == [{"column": "duration", "code": 999.0, "train_share": 0.1, "new_share": 0.12,
+                    "rows": 12, "decision": "kept: share as in train"}]
+
+
+def test_rare_code_that_jumps_becomes_missing():
+    # Sprint 9's gap: 2 real 999s in train (0.1%), then 20% of the new rows say 999
+    cleaner = RowCleaner().fit(_duration_train(2))
+    new = pd.DataFrame({"duration": ["999"] * 20 + [str(v) for v in range(1, 81)]})
+    out = cleaner.transform(new)
+    assert out["duration"].isna().sum() == 20 and out["duration"].notna().sum() == 80
+    (log,) = [d for d in cleaner.sentinel_log_ if d["code"] == 999]
+    assert log["train_share"] == 0.001 and log["new_share"] == 0.2
+    assert log["decision"] == "missing: share jumped"
+    assert cleaner.out_of_range_ == {"duration": 20}
+
+
+def test_clean_new_rows_are_unchanged():
+    train = _duration_train(2)
+    cleaner = RowCleaner().fit(train)
+    new = train.sample(500, random_state=1)
+    out = cleaner.transform(new)
+    assert out["duration"].tolist() == pd.to_numeric(new["duration"]).astype(float).tolist()
+    assert cleaner.out_of_range_ == {}
+    assert all(d["decision"].startswith("kept") for d in cleaner.sentinel_log_)
+
+
+def test_profiler_sentinels_are_candidates_and_outside_range_is_logged():
+    rng = np.random.default_rng(0)
+    train = pd.DataFrame({"x": [str(v) for v in rng.integers(1, 30, 400)]})
+    cleaner = RowCleaner().fit(train)
+    out = cleaner.transform(pd.DataFrame({"x": ["-999", "5", "6", "7"]}))
+    assert pd.isna(out["x"].iloc[0])
+    (log,) = cleaner.sentinel_log_
+    assert log["code"] == -999.0 and log["decision"] == "missing: outside the train range"
 
 
 def test_business_rule_still_applies_and_contract_ranges_override(train):

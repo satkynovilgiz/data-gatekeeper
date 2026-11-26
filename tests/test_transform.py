@@ -148,3 +148,16 @@ def test_save_and_load_give_the_same_result(tmp_path):
 def test_missing_target_rejected():
     with pytest.raises(ValueError, match="target column"):
         transform_dataset(customers(), target="label")
+
+
+def test_known_order_is_used_only_when_it_fits_the_values():
+    """Sprint 10: the Bank 'education' order must not wipe out UCI Adult's 'education'."""
+    from src.transform.plan import plan_columns
+
+    bank = pd.DataFrame({"education": ["basic.4y", "high.school", "university.degree",
+                                       "unknown"] * 10})
+    adult = pd.DataFrame({"education": ["Bachelors", "HS-grad", "Masters", "11th"] * 10})
+    (bank_plan,), _ = plan_columns(bank)
+    (adult_plan,), _ = plan_columns(adult)
+    assert bank_plan["kind"] == "ordinal"
+    assert adult_plan["kind"] == "onehot" and "matches only 0%" in adult_plan["reason"]

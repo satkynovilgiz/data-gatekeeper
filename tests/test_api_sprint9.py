@@ -111,7 +111,8 @@ def test_anomalies_endpoint():
                     params={"exclude": ["y"], "top": 3})
     assert r.status_code == 200
     body = r.json()
-    assert set(body["methods"]) == {"iforest", "zscore", "iqr"}
+    assert set(body["methods"]) == {"iforest", "zscore", "iqr", "zscore_mixture",
+                                    "iforest_with_categories"}
     assert "y" not in body["features"] and len(body["methods"]["iforest"]["top"]) == 3
     assert body["methods"]["iforest"]["flagged"] == 10                 # 1% of 1,000 rows
     assert client.post("/anomalies", files={"file": csv(SAMPLE)},

@@ -33,6 +33,7 @@ ORDINAL_ORDERS = {
     "education": ["illiterate", "basic.4y", "basic.6y", "basic.9y", "high.school",
                   "professional.course", "university.degree"],
 }
+ORDER_MATCH = 0.5        # a known order is used only if >= 50% of the values are in it
 MAX_ONEHOT = 15          # more values than this: rare ones grouped into "infrequent"
 SKEW_LIMIT = 1.0         # |skew| above this counts as skewed (a common rule of thumb)
 OUTLIER_SHARE = 0.05     # more IQR outliers than this -> robust scaler
@@ -95,8 +96,20 @@ def _numeric_plan(column: str, train: pd.Series, scaler: str | None) -> dict:
 
 
 def _category_plan(column: str, train: pd.Series, order: list[str] | None) -> dict:
-    """Ordinal (known order) or one-hot plan for one categorical column."""
+    """Ordinal (known order) or one-hot plan for one categorical column.
+
+    A known order is only used when it fits the data: at least ORDER_MATCH of the filled
+    train rows hold a value from it. Sprint 10 found why: the Bank order for "education"
+    (basic.4y < ... < university.degree) was applied to UCI Adult's "education"
+    (Bachelors, HS-grad, ...), every value fell outside it, and the column became empty.
+    """
     values = set(train.dropna().astype(str))
+    known = train.dropna().astype(str)
+    if order and len(known) and known.isin(order).mean() < ORDER_MATCH:
+        n = len(values)
+        return {"column": column, "kind": "onehot", "categories": n,
+                "reason": f"{n} categories -> one-hot (the known order for '{column}' matches "
+                          f"only {known.isin(order).mean():.0%} of the values, so it is not used)"}
     outside = sorted(values - set(order)) if order else []
     if order:
         reason = "values have an order: " + " < ".join(order)

@@ -7,6 +7,8 @@ as `gatekeeper impact`. Scores A / B / C with and without the sentinel injector,
 how many of B's filled values sit on the clip edge (train min / max).
 Sprint 9: also prints what the sentinel fix did (step 8b out_of_range_to_missing per column,
 and how many cells the imputer filled with its median / mode fallback).
+Sprint 10: also the fake duration = 999 left after cleaning (sentinels only, 20%), and the
+frequency rule's decision for every code it saw.
 """
 import sys
 import warnings
@@ -51,6 +53,17 @@ def main() -> None:
     print(f"out_of_range_to_missing: {sum(moved.values())} cells "
           f"({', '.join(f'{c} {n}' for c, n in sorted(moved.items(), key=lambda x: -x[1])[:6])})")
     print(f"imputer fallback to median / mode: {getattr(fm.imputers['B'], 'fallbacks_', 0)} cells")
+    # the Sprint 9 gap: injected 999s in duration (which has two real 999s)
+    dirty, _ = corrupt(test, LEVEL, seed, numeric, list(X.columns), ("sentinels",))
+    dirty.pop("__label__")
+    fake = (dirty["duration"] == "999") & (test["duration"] != "999")
+    left = fm.cleaner.transform(dirty)["duration"] == 999
+    print(f"sentinels only: duration cells turned into 999 {int(fake.sum())}, still 999 after "
+          f"cleaning {int((left & fake.to_numpy()).sum())}")
+    for d in getattr(fm.cleaner, "sentinel_log_", []):
+        if d["column"] == "duration":
+            print(f"  duration code {d['code']:g}: train share {d['train_share']:.4%}, new share "
+                  f"{d['new_share']:.4%} -> {d['decision']}")
     for c in ("age", "euribor3m", "nr.employed", "emp.var.rate"):
         gaps = cleaned[c].isna()
         lo, hi, _ = fm.imputers["B"].ranges_[c]

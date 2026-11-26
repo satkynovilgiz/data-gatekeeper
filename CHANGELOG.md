@@ -3,6 +3,32 @@
 All notable changes to Data Gatekeeper. Format based on [Keep a Changelog](https://keepachangelog.com/);
 versions follow the `report_version` of `profiling_report.json`.
 
+## [1.9] — 2026-11-26 — Sprint 10: close the known gaps (sentinels by frequency, anomalies, UCI Adult)
+
+### Changed
+- **Step 8b judges sentinels by frequency**: a candidate code (999, 9999, −1, −999 + the profiler's numeric sentinels of
+  the column) becomes NaN on new rows when `new_share > max(5 × train_share, train_share + 0.005)` (config
+  `sentinel_rule`, fixed before any evaluation). `learn_from_train` stores `sentinel_share` instead of `seen_sentinels`;
+  every code's decision is logged (`CleaningRun.sentinel_decisions`, `RowCleaner.sentinel_log_`).
+  Bank, HGB, sentinels at 20%: ROC-AUC 0.8498 → 0.9141; clean CV unchanged.
+
+### Added
+- Anomaly methods `zscore_mixture` (1–3 Gaussian bumps per column by BIC, distance to the nearest bump) and
+  `iforest_with_categories` (frequency or one-hot encoding; `gatekeeper anomalies --encoding`). The Sprint 9 methods are
+  unchanged. Report: `categorical_features`, `settings.mixture_components`, `mixture_z` in reasons.
+- **UCI Adult**: `scripts/download_adult.py` (pinned zip SHA-256, train + test joined, `--split`), `docs/dataset.md`,
+  `contracts/adult.yaml`, `pipeline_adult.yaml`, `scripts/diagnose_adult_impact.py` (ablation).
+- `docs/sprint-10.md`. Tests 389 → 407.
+
+### Fixed
+- Transform: a known ordinal order (Bank's `education`) is only used when ≥ 50% of the values are in it; before, UCI
+  Adult's `education` became an empty column.
+
+### Findings
+- On Adult the gatekeeper makes both models worse (ROC-AUC B − A: LogReg −0.0093, HGB −0.0053, CIs exclude 0): it
+  imputes `capital-gain = 99999` (a top code; all 244 rows are `>50K`) and the informative `?`. Keeping both closes the
+  HGB gap. The quality score still rises 99.74 → 100.00.
+
 ## [1.8] — 2026-11-25 — Sprint 9: Module 3 complete (sentinel fix, anomalies, one report)
 New files: `reports/<dataset>_validation_report.json` (schema `docs/validation_report.schema.json`),
 `reports/<dataset>_anomalies.json`. `<dataset>_contract.json` is still written.
