@@ -223,12 +223,27 @@ before imputing (step 8b). That fixed the Sprint 8 weakness: HistGradientBoostin
 ```bash
 python gatekeeper.py anomalies data/raw/bank_marketing.csv --method all --top 10 --exclude y
 ```
-Three methods score every row: **robust z** (|x − median| / 1.4826·MAD), **IQR** distance and an
-**Isolation Forest** (seed 42, contamination 1%). The top rows come with the 3 columns that made them odd (value,
+Five methods score every row: **robust z** (|x − median| / 1.4826·MAD), **IQR** distance and an
+**Isolation Forest** (seed 42, contamination 1%), plus (Sprint 10) **`zscore_mixture`** for multi-bump columns and
+**`iforest_with_categories`**. The top rows come with the 3 columns that made them odd (value,
 median, robust z; leave-one-column-out for the forest). The label, IDs and PII are never used or printed.
 Honest evaluation on 412 planted anomalies in Bank Marketing (settings fixed before the first run): the forest ranks
 best overall (ROC-AUC 0.8374), robust z is the most precise on single extremes (precision@k 0.2117), and every method
 has low precision because the real file has many natural outliers and a bimodal `euribor3m`.
+
+## Second dataset: UCI Adult (Sprint 10)
+```bash
+python scripts/download_adult.py --split        # official zip, SHA-256 checked -> data/raw/adult.csv
+python gatekeeper.py run --config pipeline_adult.yaml --skip impact
+python gatekeeper.py impact data/raw/adult.csv --target income     # ~35 min (iterative imputer)
+```
+**Honest result: on Adult the gatekeeper makes models worse** (ROC-AUC B − A: LogReg −0.0093, HGB −0.0053, CIs exclude 0),
+while its quality score goes up (99.74 → 100.00). The ablation shows why: `capital-gain = 99999` is a top code, and all
+244 of those rows earn `>50K`, so treating it as a sentinel erases signal. And `?` is informative (9.47% `>50K` vs 24.81%).
+Keeping both closes the gap for HistGradientBoosting. On dirty incoming data the gatekeeper is still far more robust
+(LogReg with 20% mixed corruption: −0.0644 vs −0.3070 raw). Sentinels are now judged by frequency
+(Bank, HGB, 20% sentinels: 0.8498 → 0.9141), and the new `zscore_mixture` anomaly method lifts precision@k from
+0.10 to 0.59. Details: [`docs/sprint-10.md`](docs/sprint-10.md), dataset: [`docs/dataset.md`](docs/dataset.md).
 
 ## Project structure
 
