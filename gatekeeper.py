@@ -5,6 +5,7 @@
                          [--reference REF.csv] [--anomalies] [--fail-on-anomaly-share X]
     python gatekeeper.py anomalies <data.csv> [--method iforest|zscore|iqr|all] [--top 10]
     python gatekeeper.py decisions <data.csv> [--target y] [--write decisions.yaml]
+    python gatekeeper.py report reports/run_<time>          # one HTML page for a run
     python gatekeeper.py drift <reference.csv> <current.csv> [--contract FILE]
     python gatekeeper.py impact <data.csv> --target y [--folds 5] [--no-robustness]
     python gatekeeper.py run --config pipeline.yaml [--skip impact]
@@ -312,7 +313,7 @@ def cmd_run(args: argparse.Namespace) -> int:
         detail = s.get("error") or s.get("reason") or ""
         print(f"{s['step']:9} {s['status'].upper():8} {s.get('seconds', '-'):>7}  {detail}")
     print(f"\n{summary['status'].upper()} (exit {code}) in {summary['total_seconds']} s")
-    print(f"Summary -> {out / 'summary.md'}")
+    print(f"Summary -> {out / 'summary.md'}\nReport  -> {out / 'report.html'}")
     return code
 
 
@@ -356,6 +357,18 @@ def cmd_decisions(args: argparse.Namespace) -> int:
         out.parent.mkdir(parents=True, exist_ok=True)
         out.write_text(decisions_yaml(found, Path(args.csv).name), encoding="utf-8")
         print(f"\nDraft decisions -> {out} (a person must confirm them)")
+    return EXIT_OK
+
+
+def cmd_report(args: argparse.Namespace) -> int:
+    """`report`: one self-contained HTML page for a run folder."""
+    from src.pipeline.html import write_report
+
+    try:
+        path = write_report(args.run_dir)
+    except FileNotFoundError as e:
+        raise InputError(str(e)) from None
+    print(f"Report -> {path}")
     return EXIT_OK
 
 
@@ -433,6 +446,10 @@ def build_parser() -> argparse.ArgumentParser:
     dec.add_argument("--write", metavar="FILE", help="write a draft decisions: block (YAML)")
     dec.add_argument("--force", action="store_true", help="overwrite --write FILE")
     dec.set_defaults(func=cmd_decisions)
+
+    rep = sub.add_parser("report", help="one HTML page for a run folder (reports/run_...)")
+    rep.add_argument("run_dir", help="the run folder (has summary.json)")
+    rep.set_defaults(func=cmd_report)
 
     run = sub.add_parser("run", help="run the steps of a pipeline YAML in order")
     run.add_argument("--config", required=True, help="pipeline YAML, e.g. pipeline.yaml")
