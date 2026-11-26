@@ -9,6 +9,7 @@ reports/
 
 # real datasets: keep big files out of git (download with scripts/download_bank_marketing.py)
 data/raw/bank_marketing.csv
+data/raw/bank_marketing.csv.sha256
 data/raw/adult.csv
 data/raw/adult.csv.sha256
 
