@@ -30,6 +30,7 @@ reports/run_<UTC timestamp>/summary.json and summary.md, next to each step's own
 from __future__ import annotations
 
 import json
+import logging
 import time
 import traceback
 from collections.abc import Callable
@@ -49,16 +50,18 @@ ORDER = ("profile", "validate", "clean", "mask_pii", "quality", "anomalies", "dr
 OPTIONS = {
     "profile": set(),
     "validate": {"contract"},
-    "clean": {"imputer"},
+    "clean": {"imputer", "decisions"},
     "mask_pii": {"actions"},
     "quality": set(),
     "anomalies": {"method", "top", "contamination", "exclude", "fail_on_share"},
     "drift": {"reference", "contract", "gate"},
-    "impact": {"target", "folds", "robustness", "positive"},
+    "impact": {"target", "folds", "robustness", "positive", "decisions"},
 }
 REQUIRED = {"validate": {"contract"}, "drift": {"reference"}, "impact": {"target"}}
 TOP_KEYS = {"input", "name", "reports_dir", "steps"}
 EXIT_OK, EXIT_STOPPED, EXIT_ERROR = 0, 1, 2
+LOG_FORMAT = "%(asctime)s %(levelname)-7s %(name)s: %(message)s"
+log = logging.getLogger("gatekeeper.run")
 
 
 class ConfigError(ValueError):
@@ -185,15 +188,28 @@ class Context:
 
 
 def step_profile(ctx: Context, opts: dict) -> dict:
-    """Module 1 profile of the input."""
+    """Module 1 profile of the input, + the decisions a person should confirm (Sprint 11)."""
+    from src.profiling.decisions import find_decisions, load_decisions
+
     ctx.profile = profile_dataset(ctx.raw, dataset_name=Path(ctx.cfg["input"]).name)
     path = save_report(ctx.profile, ctx.out)
     d = ctx.profile["dataset"]
-    return {"status": "passed", "files": [str(path)],
+    steps = dict(ctx.cfg["steps"])
+    target = (steps.get("impact") or {}).get("target")
+    if target not in ctx.raw.columns:
+        target = None
+    chosen = (steps.get("clean") or {}).get("decisions")
+    config = {"decisions": load_decisions(chosen)} if chosen else None
+    found = find_decisions(ctx.raw, ctx.profile, target=target, config=config)
+    dec_path = ctx.write("decisions.json", {"target": target, "decisions": found})
+    log.info("profile: %d decisions for a person%s", len(found),
+             "" if target else " (no target: counts only)")
+    return {"status": "passed", "files": [str(path), dec_path],
             "result": {"rows": d["rows"], "columns": d["columns"],
                        "duplicate_rows": d["duplicate_rows"],
                        "issues": len(ctx.profile["issues"]),
-                       "quality_score": ctx.profile["quality_score"]["overall"]}}
+                       "quality_score": ctx.profile["quality_score"]["overall"],
+                       "decisions_for_a_person": len(found)}}
 
 
 def step_validate(ctx: Context, opts: dict) -> dict:
@@ -218,6 +234,9 @@ def step_clean(ctx: Context, opts: dict) -> dict:
     from src.cleaning.cleaner import clean_file
 
     config = {}
+    if opts.get("decisions"):                      # Sprint 11: a YAML with a decisions: block
+        from src.profiling.decisions import load_decisions
+        config["decisions"] = load_decisions(opts["decisions"])
     if "imputer" in opts:
         method = opts["imputer"]
         config = {"numeric_strategy": method,
@@ -226,8 +245,11 @@ def step_clean(ctx: Context, opts: dict) -> dict:
     ctx.clean_log = log
     ctx.cleaned_path = Path(log["outputs"]["cleaned_data"])
     s = log["summary"]
+    chosen = [f"{d['column']}={d['value']}: {d['action']}" for d in log.get("decisions", [])
+              if d["set_by"] == "config"]
     return {"status": "passed", "files": list(log["outputs"].values()),
             "result": {"rows_before": s["rows_before"], "rows_after": s["rows_after"],
+                       "decisions_from_config": chosen,
                        "duplicates_removed": s["duplicates_removed"],
                        "disguised_missing_converted": s["disguised_missing_converted"],
                        "values_imputed": s["values_imputed"],
@@ -304,9 +326,13 @@ def step_impact(ctx: Context, opts: dict) -> dict:
     from src.impact.impact import run_impact
     from src.impact.report import write_impact_report
 
+    config = None
+    if opts.get("decisions"):
+        from src.profiling.decisions import load_decisions
+        config = {"decisions": load_decisions(opts["decisions"])}
     report = run_impact(ctx.raw, opts["target"], positive=opts.get("positive"),
                         folds=opts.get("folds", 5), robustness=opts.get("robustness", True),
-                        dataset=ctx.cfg["name"])
+                        dataset=ctx.cfg["name"], cleaner_config=config)
     files = write_impact_report(report, ctx.out, ctx.cfg["name"])
     headline = {}
     for m, by_metric in report["comparisons"].get("B-A", {}).items():
@@ -347,6 +373,33 @@ def run_pipeline(cfg: dict, skip: set[str] | None = None) -> tuple[int, dict, Pa
         raise ConfigError(f"input file not found: {cfg['input']}")
     start = time.perf_counter()
     out = _run_dir(cfg["reports_dir"])
+    handlers = _start_logging(out)
+    try:
+        return _run(cfg, skip, out, start)
+    finally:
+        for h in handlers:
+            log.removeHandler(h)
+            h.close()
+
+
+def _start_logging(out: Path) -> list[logging.Handler]:
+    """Console (INFO) + out/run.log (DEBUG). Messages hold names, counts and timings only:
+    never a data value (errors are logged by their type)."""
+    log.setLevel(logging.DEBUG)
+    log.propagate = False
+    file_handler = logging.FileHandler(out / "run.log", encoding="utf-8")
+    file_handler.setLevel(logging.DEBUG)
+    console = logging.StreamHandler()
+    console.setLevel(logging.INFO)
+    for h in (file_handler, console):
+        h.setFormatter(logging.Formatter(LOG_FORMAT))
+        log.addHandler(h)
+    return [file_handler, console]
+
+
+def _run(cfg: dict, skip: set[str], out: Path, start: float) -> tuple[int, dict, Path]:
+    log.info("run %s: %d steps, input %s, folder %s", cfg["name"], len(cfg["steps"]),
+             Path(cfg["input"]).name, out)
     summary: dict[str, Any] = {
         "name": cfg["name"], "input": cfg["input"],
         "started_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
@@ -361,8 +414,10 @@ def run_pipeline(cfg: dict, skip: set[str] | None = None) -> tuple[int, dict, Pa
         elif name in skip or opts.get("enabled") is False:
             entry.update(status="skipped",
                          reason="--skip" if name in skip else "enabled: false in the config")
+            log.info("step %s skipped (%s)", name, entry["reason"])
         else:
             t0 = time.perf_counter()
+            log.debug("step %s started", name)
             try:
                 entry.update(STEPS[name](ctx, opts))
             except StepStop as stop:
@@ -372,7 +427,10 @@ def run_pipeline(cfg: dict, skip: set[str] | None = None) -> tuple[int, dict, Pa
                 entry.update(status="error", error=f"{e.__class__.__name__}: {e}",
                              trace=traceback.format_exc(limit=3))
                 code, stopped = EXIT_ERROR, True
+                log.error("step %s crashed: %s", name, e.__class__.__name__)
             entry["seconds"] = round(time.perf_counter() - t0, 2)
+            level = logging.INFO if entry["status"] in ("passed", "warn") else logging.WARNING
+            log.log(level, "step %s %s in %.2f s", name, entry["status"], entry["seconds"])
         summary["steps"].append(entry)
     summary["status"] = {EXIT_OK: "passed", EXIT_STOPPED: "stopped at a gate",
                          EXIT_ERROR: "error"}[code]
@@ -380,6 +438,11 @@ def run_pipeline(cfg: dict, skip: set[str] | None = None) -> tuple[int, dict, Pa
     summary["total_seconds"] = round(time.perf_counter() - start, 2)
     (out / "summary.json").write_text(json.dumps(summary, indent=2, default=str) + "\n")
     (out / "summary.md").write_text(summary_markdown(summary), encoding="utf-8")
+    from src.pipeline.html import write_report
+
+    report = write_report(out)
+    log.info("run %s: %s (exit %d) in %.2f s; report %s", cfg["name"], summary["status"], code,
+             summary["total_seconds"], report.name)
     return code, summary, out
 
 
@@ -389,7 +452,7 @@ def _short(result: dict | None) -> str:
     parts = []
     for k, v in result.items():
         if isinstance(v, (dict, list)) and k not in ("failed_rules", "major_columns",
-                                                     "top_rows"):
+                                                     "top_rows", "decisions_from_config"):
             continue
         if isinstance(v, list):
             v = "; ".join(map(str, v)) or "none"

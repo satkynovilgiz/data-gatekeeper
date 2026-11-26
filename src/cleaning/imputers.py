@@ -36,6 +36,19 @@ FOLD_METHODS = ("median", "knn", "iterative")    # methods FoldImputer can fit/a
 METHODS = ("median", "mean", "mode", *ML_METHODS)
 KNN_NEIGHBOURS = 5
 ITERATIVE_ROUNDS = 10
+# How IterativeImputer runs: the default the cleaner, the pipeline and the impact study use.
+# Sprint 11 measured faster settings (scripts/evaluate_imputer_speed.py, rule fixed before
+# measuring). The rule picked skip_complete=True (same hidden-10% accuracy, Adult fold fit
+# 349.8 s -> 140.5 s), but that evaluation cannot see one case: a column with no gaps in
+# training gets NO model, so a gap in a NEW row is filled with the training mean. The Bank
+# robustness study then showed the cost (HGB, all corruption at 20%: 0.8126 -> 0.7590), so the
+# default stays skip_complete=False. Set ITERATIVE["skip_complete"] = True for speed on clean data.
+ITERATIVE = {"max_iter": ITERATIVE_ROUNDS, "skip_complete": False, "n_nearest_features": None}
+
+
+def make_iterative(settings: dict | None = None) -> IterativeImputer:
+    """The IterativeImputer with the project's settings (seed 42); settings override ITERATIVE."""
+    return IterativeImputer(random_state=SEED, **{**ITERATIVE, **(settings or {})})
 SEED = 42
 
 
@@ -211,8 +224,7 @@ def impute_columns(df: pd.DataFrame, targets: list[str], features: list[str],
         with warnings.catch_warnings(), np.errstate(divide="ignore", over="ignore",
                                                     invalid="ignore"):
             warnings.simplefilter("ignore", ConvergenceWarning)   # + the false matmul flags
-            X = IterativeImputer(max_iter=ITERATIVE_ROUNDS,
-                                 random_state=SEED).fit_transform(enc.X)
+            X = make_iterative().fit_transform(enc.X)
     for t in targets:
         out[t] = _finish(df[t], decode(enc, X, t))
     return out
@@ -280,8 +292,7 @@ class FoldImputer:
             if self.method == "knn":
                 self.model_ = KNNImputer(n_neighbors=KNN_NEIGHBOURS).fit(self.encoding_.X)
             else:
-                self.model_ = IterativeImputer(max_iter=ITERATIVE_ROUNDS,
-                                               random_state=SEED).fit(self.encoding_.X)
+                self.model_ = make_iterative().fit(self.encoding_.X)
         return self
 
     def transform(self, X: pd.DataFrame) -> pd.DataFrame:

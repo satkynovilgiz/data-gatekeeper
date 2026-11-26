@@ -1,0 +1,19 @@
+# Decisions for UCI Adult, confirmed by a person (Sprint 11).
+# Evidence: `python gatekeeper.py decisions data/raw/adult.csv --target income`
+#
+# capital-gain = 99999  keep_as_value
+#   A top code: the census records amounts above the cap as 99999. It is a real (very high)
+#   gain, not "no value". All 244 rows earn >50K (vs 23.55% of the others).
+# workclass = "?"  and  occupation = "?"  keep_as_category
+#   "No job reported" is an answer: 9.47% / 9.43% >50K vs 24.81%. Every workclass "?" row also
+#   has occupation "?" (the 10 extra occupation "?" rows are workclass Never-worked), so both
+#   columns get the same decision.
+# native-country = "?" is NOT listed: its rows are not clearly different (25.67% vs 23.90%),
+#   so imputing it (the default) is kept.
+#
+# Caveat: these choices were informed by the Sprint 10 ablation on this same data, so
+# re-running the impact study with them is NOT an independent test of the decisions.
+decisions:
+  capital-gain: {'99999': keep_as_value}
+  workclass: {'?': keep_as_category}
+  occupation: {'?': keep_as_category}

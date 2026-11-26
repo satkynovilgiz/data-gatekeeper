@@ -12,6 +12,7 @@ steps:
       contract: contracts/adult.yaml
   - clean:
       imputer: iterative
+      decisions: contracts/adult_decisions.yaml   # Sprint 11: confirmed by a person
   - mask_pii
   - quality
   - anomalies:
@@ -24,3 +25,4 @@ steps:
       target: income
       folds: 5
       robustness: true
+      decisions: contracts/adult_decisions.yaml

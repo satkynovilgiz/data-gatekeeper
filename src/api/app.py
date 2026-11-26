@@ -13,6 +13,9 @@ Endpoints (upload one CSV as the form field "file"):
                          + anomalies with ?anomalies=true)           (Sprint 9)
     POST /drift       -> drift report of "current" against "reference" (Sprint 9)
     POST /anomalies   -> unusual rows with explanations (Sprint 9)
+    POST /run         -> the pipeline on an uploaded CSV + a small JSON config; summary +
+                         a link to report.html (or ?output=html)            (Sprint 11)
+    GET  /runs/{id}/report.html -> that page
 
 Safety rules:
   * .csv only, at most MAX_UPLOAD_MB and MAX_ROWS -> clear 4xx errors otherwise
@@ -25,13 +28,21 @@ Safety rules:
 # No "from __future__ import annotations" here: FastAPI reads the parameter types at
 # runtime, and Python 3.9 cannot evaluate "str | None", so Optional/Union are used.
 import io
+import json
 import logging
+import re
+import shutil
+import subprocess
+import sys
+import tempfile
+import uuid
+from pathlib import Path
 from typing import Literal, Optional, Union
 
 import pandas as pd
 import yaml
 from fastapi import FastAPI, File, HTTPException, Query, Request, UploadFile
-from fastapi.responses import JSONResponse, Response
+from fastapi.responses import HTMLResponse, JSONResponse, Response
 
 from src.cleaning.cleaner import clean_dataset
 from src.privacy.mask import PrivacyError, mask_dataframe
@@ -46,6 +57,12 @@ from src.validation.report import parse_methods, validation_report
 MAX_UPLOAD_MB = 20
 MAX_ROWS = 200_000
 MAX_CONTRACT_KB = 256        # a contract is a small YAML file
+MAX_CONFIG_KB = 16           # POST /run config (JSON)
+RUN_TIMEOUT_S = 120          # POST /run is synchronous: longer runs belong to the CLI
+ROOT = Path(__file__).resolve().parents[2]
+API_RUNS_DIR = ROOT / "reports" / "api_runs"
+CONTRACTS_DIR = ROOT / "contracts"
+API_STEPS = {"profile", "validate", "clean", "mask_pii", "quality", "anomalies"}
 PREVIEW_ROWS = 5
 FORM_OVERHEAD = 64 * 1024    # multipart headers around the file
 
@@ -296,3 +313,104 @@ def anomalies_endpoint(file: UploadFile = File(..., description="CSV file"),
                       exclude=exclude)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
+
+
+# ------------------------------------------------------------- Sprint 11: /run
+def _run_config(file: UploadFile) -> dict:
+    """Read and check the JSON config of POST /run (no paths except contract names)."""
+    from src.pipeline.run import ConfigError, parse_config
+
+    try:
+        data = file.file.read(MAX_CONFIG_KB * 1024 + 1)
+    finally:
+        file.file.close()
+    if len(data) > MAX_CONFIG_KB * 1024:
+        raise HTTPException(status_code=413, detail=f"Config is larger than {MAX_CONFIG_KB} KB")
+    try:
+        raw = json.loads(data.decode("utf-8", errors="replace"))
+    except json.JSONDecodeError as e:
+        raise HTTPException(status_code=400, detail="The config is not valid JSON") from e
+    if not isinstance(raw, dict):
+        raise HTTPException(status_code=400, detail="The config must be a JSON object")
+    for key in ("input", "reports_dir"):
+        if key in raw:
+            raise HTTPException(status_code=400, detail=f"'{key}' is set by the server")
+    steps = raw.get("steps")
+    names = [next(iter(x)) if isinstance(x, dict) and len(x) == 1 else x for x in steps or []]
+    bad = [n for n in names if isinstance(n, str) and n not in API_STEPS]
+    if bad:
+        raise HTTPException(status_code=400, detail=f"step(s) {bad} are not available over "
+                            f"HTTP (they need server files or take minutes); use the CLI")
+    for item in steps or []:
+        if isinstance(item, dict) and isinstance(item.get("validate"), dict):
+            name = str(item["validate"].get("contract", ""))
+            if not re.fullmatch(r"[A-Za-z0-9_-]+(\.ya?ml)?", name):
+                raise HTTPException(status_code=400, detail="validate.contract must be the name "
+                                    "of a contract in contracts/, e.g. 'example'")
+            path = CONTRACTS_DIR / (name if name.endswith((".yaml", ".yml")) else f"{name}.yaml")
+            if not path.is_file():
+                raise HTTPException(status_code=400, detail=f"contract {name!r} not found")
+            item["validate"]["contract"] = str(path)
+        if isinstance(item, dict) and isinstance(item.get("clean"), dict) and \
+                "decisions" in item["clean"]:
+            raise HTTPException(status_code=400, detail="clean.decisions is not available over "
+                                "HTTP yet; use the CLI")
+    try:
+        parse_config({**raw, "input": "upload.csv"}, source="config")
+    except ConfigError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    return raw
+
+
+@app.post("/run", response_model=None)
+def run(file: UploadFile = File(..., description="CSV file to process"),
+        config: UploadFile = File(..., description="JSON config: {\"steps\": [...]}"),
+        output: Literal["json", "html"] = Query("json"),
+        ) -> Union[dict, Response]:
+    """The whole pipeline on an upload, synchronously (at most RUN_TIMEOUT_S seconds)."""
+    cfg = _run_config(config)
+    data, name = read_upload(file)
+    parse_csv(data)                                   # same checks as every endpoint
+    run_id = uuid.uuid4().hex
+    out_dir = API_RUNS_DIR / run_id
+    with tempfile.TemporaryDirectory(prefix="gatekeeper-run-") as tmp:
+        # the pipeline reads a file, so the upload is written to a private temporary folder
+        # that is deleted when the run ends
+        csv_path = Path(tmp) / Path(name).name
+        csv_path.write_bytes(data)
+        cfg_path = Path(tmp) / "pipeline.json"
+        cfg_path.write_text(json.dumps({**cfg, "name": cfg.get("name") or Path(name).stem,
+                                        "input": str(csv_path), "reports_dir": str(out_dir)}))
+        try:
+            proc = subprocess.run([sys.executable, str(ROOT / "gatekeeper.py"), "run",
+                                   "--config", str(cfg_path)], cwd=ROOT, capture_output=True,
+                                  text=True, timeout=RUN_TIMEOUT_S)
+        except subprocess.TimeoutExpired as e:
+            shutil.rmtree(out_dir, ignore_errors=True)
+            raise HTTPException(status_code=504, detail=f"The run took longer than "
+                                f"{RUN_TIMEOUT_S} s; use `gatekeeper run` for big files") from e
+    runs = sorted(out_dir.glob("run_*"))
+    if not runs:
+        log.error("POST /run produced no run folder (exit %s)", proc.returncode)
+        raise HTTPException(status_code=500, detail="Internal error while running the pipeline")
+    run_dir = runs[0]
+    for data_file in run_dir.rglob("*.csv"):          # keep reports only, never the data
+        data_file.unlink()
+    # the cleaning log keeps before -> after examples (data values): not kept on the server
+    shutil.rmtree(run_dir / "clean", ignore_errors=True)
+    summary = json.loads((run_dir / "summary.json").read_text())
+    if output == "html":
+        return HTMLResponse((run_dir / "report.html").read_text(encoding="utf-8"))
+    return {"run_id": run_id, "exit_code": proc.returncode, "status": summary["status"],
+            "report_url": f"/runs/{run_id}/report.html", "summary": summary}
+
+
+@app.get("/runs/{run_id}/report.html", response_class=HTMLResponse)
+def run_report(run_id: str) -> HTMLResponse:
+    """The HTML report of an earlier POST /run."""
+    if not re.fullmatch(r"[0-9a-f]{32}", run_id):
+        raise HTTPException(status_code=404, detail="No such run")
+    pages = sorted((API_RUNS_DIR / run_id).glob("run_*/report.html"))
+    if not pages:
+        raise HTTPException(status_code=404, detail="No such run")
+    return HTMLResponse(pages[0].read_text(encoding="utf-8"))

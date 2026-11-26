@@ -121,6 +121,11 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "sentinel_rule": {"k": 5.0, "min_abs": 0.005},
     # What the train rows looked like (learn_from_train()); None when cleaning one file.
     "learned": None,
+    # Sprint 11: decisions a person confirmed, {column: {value: action}}; see
+    # src/profiling/decisions.py. Actions: keep_as_value, treat_as_missing, keep_as_category,
+    # impute. Example (UCI Adult): {"capital-gain": {"99999": "keep_as_value"},
+    #                               "workclass": {"?": "keep_as_category"}}
+    "decisions": {},
 }
 
 IMPUTE_STRATEGIES = {*METHODS, "none"}
@@ -682,6 +687,70 @@ ROW_STEPS = [trim_whitespace, special_codes, disguised_missing_to_nan, normalise
 STEPS = [*ROW_STEPS, drop_duplicates, fuzzy_duplicates, handle_outliers, impute]
 
 
+# ------------------------------------------------------------- decisions
+def _same_code(a: Any, b: Any) -> bool:
+    """'99999' == 99999 == '99999.0'; text codes compare as text."""
+    if str(a) == str(b):
+        return True
+    try:
+        return float(a) == float(b)
+    except (TypeError, ValueError):
+        return False
+
+
+def apply_decisions(schema: dict, cfg: dict) -> list[dict]:
+    """Make the schema and config follow the confirmed decisions; return the decision log.
+
+    cfg must be a private copy (its keep_as_category / special_codes are replaced, not edited).
+    Each log entry: {column, value, action, set_by: "config" | "default"}.
+    """
+    from src.profiling.decisions import normalise_decisions
+
+    chosen = normalise_decisions(cfg.get("decisions") or {})
+    cfg["keep_as_category"] = list(cfg["keep_as_category"])
+    cfg["special_codes"] = dict(cfg["special_codes"])
+    log = []
+    for column, choices in chosen.items():
+        col = schema["columns"].get(column)
+        for value, action in choices.items():
+            entry = {"column": column, "value": value, "action": action, "set_by": "config"}
+            if col is None:
+                log.append({**entry, "note": "column not in the data: nothing to do"})
+                continue
+            codes = col.setdefault("missing_codes", [])
+            matches = [m for m in codes if _same_code(m, value)]
+            if action == "keep_as_value":
+                col["missing_codes"] = [m for m in codes if m not in matches]
+                rule = cfg["special_codes"].get(column)
+                if rule and _same_code(rule["code"], value):
+                    del cfg["special_codes"][column]
+            else:
+                if not matches:
+                    codes.append(value)
+                if action == "keep_as_category" and column not in cfg["keep_as_category"]:
+                    cfg["keep_as_category"].append(column)
+                if action in ("impute", "treat_as_missing") and column in cfg["keep_as_category"]:
+                    cfg["keep_as_category"].remove(column)
+            log.append(entry)
+    # what happens to every other code the profiler found: the default, shown as such
+    for column, col in schema["columns"].items():
+        for code in col.get("missing_codes", []):
+            if str(code) in chosen.get(column, {}):
+                continue
+            rule = cfg["special_codes"].get(column)
+            if rule and _same_code(rule["code"], code):
+                action = "special_code"
+            elif column in cfg["keep_as_category"] and col.get("expected_type") == "categorical":
+                action = "keep_as_category"
+            elif col.get("expected_type") == "numeric":
+                action = "treat_as_missing"
+            else:
+                action = "impute"
+            log.append({"column": column, "value": str(code), "action": action,
+                        "set_by": "default"})
+    return log
+
+
 # -------------------------------------------------------------- pipeline
 def _whole_numbers_as_int(df: pd.DataFrame) -> pd.DataFrame:
     """Numeric columns whose values are all whole become integers (42.0 -> 42; NaN allowed)."""
@@ -773,7 +842,9 @@ def clean_dataset(df: pd.DataFrame, report: dict,
         raise ValueError(f"unknown imputation strategy {bad}; use one of "
                          f"{sorted(IMPUTE_STRATEGIES)}")
     start = time.perf_counter()
-    run = CleaningRun(df=df.copy(), schema=infer_schema(df, report), config=cfg,
+    schema = infer_schema(df, report)
+    decision_log = apply_decisions(schema, cfg)
+    run = CleaningRun(df=df.copy(), schema=schema, config=cfg,
                       suggestions=report.get("cleaning_suggestions", []))
     evaluation, eval_seconds = None, 0.0
     for step in STEPS:
@@ -795,6 +866,7 @@ def clean_dataset(df: pd.DataFrame, report: dict,
         "config": {k: v for k, v in cfg.items() if k != "max_examples"},
         "steps": run.steps,
         "suggestions": _suggestion_status(run),
+        "decisions": decision_log,
         "summary": _summary(run, len(df), df.shape[1]),
     }
     # cleaning time only; the (optional) evaluation is timed on its own
