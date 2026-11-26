@@ -30,6 +30,7 @@ def test_classify():
     assert c("python scripts/download_adult.py --split")[0] == "help"          # has argparse
     assert c("python scripts/evaluate_imputer_speed.py")[0] == "skip"          # would run in full
     assert c("python scripts/nope.py")[0] == "fail"
+    assert c("python scripts/check_docs_commands.py")[0] == "skip"           # never runs itself
 
 
 def test_parser_check_catches_wrong_options():

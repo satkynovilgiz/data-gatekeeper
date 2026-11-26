@@ -90,7 +90,7 @@ def classify(cmd: str, root: Path = ROOT) -> tuple[str, str]:
     if script != "gatekeeper.py":
         # only scripts with argparse answer --help; others would run in full (minutes,
         # and some rewrite data/demo/), so they are only checked to exist
-        if "argparse" in (root / script).read_text(encoding="utf-8"):
+        if re.search(r"^import argparse", (root / script).read_text(encoding="utf-8"), re.M):
             return "help", "script: run with --help"
         return "skip", "script without --help: runs in full (exists)"
     sub = argv[2] if len(argv) > 2 else ""
@@ -231,4 +231,7 @@ def main() -> int:
 
 
 if __name__ == "__main__":
+    if "-h" in sys.argv or "--help" in sys.argv:
+        print(__doc__)
+        sys.exit(0)
     sys.exit(main())
