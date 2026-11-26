@@ -146,10 +146,10 @@ See `docs/sprint-09.md` and `docs/module3_presentation.md`.
 The one-command pipeline, YAML config, Docker and CI were pulled forward into Sprints 7–8, so Module 4 is about
 closing the known gaps and presenting the system.
 
-### Sprint 10 ⏳ — Close the known gaps
-- Sentinel rule by frequency (a code's share in new rows vs. its train share), then re-run the robustness study
-- Categories in the anomaly forest (frequency / one-hot encoding); a mixture-aware z for bimodal columns
-- The impact study on a second, messier dataset (e.g. the HR sample scaled up, or another public dataset)
+### Sprint 10 🔄 — Close the known gaps
+- 🔄 Sentinel rule by frequency (a code's share in new rows vs. its train share), then re-run the robustness study
+- 🔄 Categories in the anomaly forest (frequency / one-hot encoding); a mixture-aware z for bimodal columns
+- 🔄 The impact study on a second, messier real dataset: UCI Adult (Census Income), with "?" missing values
 
 **Deliverable:** the Sprint 9 limitations fixed or measured on a second dataset.
 
