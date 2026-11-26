@@ -36,9 +36,13 @@ ORDINAL_ORDERS = {
 ORDER_MATCH = 0.5        # a known order is used only if >= 50% of the values are in it
 MAX_ONEHOT = 15          # more values than this: rare ones grouped into "infrequent"
 SKEW_LIMIT = 1.0         # |skew| above this counts as skewed (a common rule of thumb)
-# Power transforms for skewed columns (Sprint 12): "default" = use them at all; "off" = columns
-# that are only scaled. Changed only through evidence (scripts/ablate_power_transform.py).
-POWER = {"default": True, "off": set()}
+# Power transforms for skewed columns: "default" = use them at all; "off" = columns that are
+# only scaled. Sprint 12 decided the default by a rule written before measuring
+# (scripts/ablate_power_transform.py): turning them off did NOT hurt LogReg on both datasets
+# (it hurt Bank's PR-AUC by 0.0191 via duration, and helped Adult's by 0.0322 via
+# capital-gain) and trees did not change -> skewed columns are only SCALED by default.
+# Set POWER["default"] = True to get log1p / Yeo-Johnson back.
+POWER = {"default": False, "off": set()}
 
 
 def power_allowed(column: str) -> bool:
