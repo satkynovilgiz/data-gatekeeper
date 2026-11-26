@@ -36,6 +36,14 @@ FOLD_METHODS = ("median", "knn", "iterative")    # methods FoldImputer can fit/a
 METHODS = ("median", "mean", "mode", *ML_METHODS)
 KNN_NEIGHBOURS = 5
 ITERATIVE_ROUNDS = 10
+# How IterativeImputer runs. Sprint 11 measures faster settings (scripts/evaluate_imputer_speed.py);
+# the values here are the default the cleaner, the pipeline and the impact study use.
+ITERATIVE = {"max_iter": ITERATIVE_ROUNDS, "skip_complete": False, "n_nearest_features": None}
+
+
+def make_iterative(settings: dict | None = None) -> IterativeImputer:
+    """The IterativeImputer with the project's settings (seed 42); settings override ITERATIVE."""
+    return IterativeImputer(random_state=SEED, **{**ITERATIVE, **(settings or {})})
 SEED = 42
 
 
@@ -211,8 +219,7 @@ def impute_columns(df: pd.DataFrame, targets: list[str], features: list[str],
         with warnings.catch_warnings(), np.errstate(divide="ignore", over="ignore",
                                                     invalid="ignore"):
             warnings.simplefilter("ignore", ConvergenceWarning)   # + the false matmul flags
-            X = IterativeImputer(max_iter=ITERATIVE_ROUNDS,
-                                 random_state=SEED).fit_transform(enc.X)
+            X = make_iterative().fit_transform(enc.X)
     for t in targets:
         out[t] = _finish(df[t], decode(enc, X, t))
     return out
@@ -280,8 +287,7 @@ class FoldImputer:
             if self.method == "knn":
                 self.model_ = KNNImputer(n_neighbors=KNN_NEIGHBOURS).fit(self.encoding_.X)
             else:
-                self.model_ = IterativeImputer(max_iter=ITERATIVE_ROUNDS,
-                                               random_state=SEED).fit(self.encoding_.X)
+                self.model_ = make_iterative().fit(self.encoding_.X)
         return self
 
     def transform(self, X: pd.DataFrame) -> pd.DataFrame:
