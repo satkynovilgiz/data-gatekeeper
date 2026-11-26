@@ -126,3 +126,14 @@ def test_cli_anomalies(tmp_path):
            "--reports-dir", tmp_path)
     assert r.returncode == 1
     assert gk("anomalies", tmp_path / "missing.csv").returncode == 2
+
+
+def test_cli_anomalies_new_methods_and_encoding(tmp_path):
+    r = gk("anomalies", SAMPLE, "--method", "zscore_mixture,iforest_with_categories",
+           "--encoding", "onehot", "--exclude", "y", "--top", "2", "--reports-dir", tmp_path)
+    assert r.returncode == 0, r.stderr
+    section = json.loads((tmp_path / "bank_marketing_sample_anomalies.json").read_text())
+    assert list(section["methods"]) == ["zscore_mixture", "iforest_with_categories"]
+    assert section["settings"]["encoding"] == "onehot"
+    assert "categorical" in r.stdout
+    assert gk("anomalies", SAMPLE, "--encoding", "target").returncode == 2

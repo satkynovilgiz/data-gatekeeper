@@ -161,3 +161,83 @@ def test_reference_fit_and_bad_settings(table):
         detect(raw, methods=("lof",))
     with pytest.raises(ValueError, match="contamination"):
         detect(raw, contamination=0.9)
+
+
+# ------------------------------------------------- Sprint 10: categories + mixture z
+from src.validation.anomaly import fit_mixture  # noqa: E402
+
+
+def test_frequency_encoding_and_one_hot():
+    X = pd.DataFrame({"x": [1.0, 2.0, 3.0, 4.0] * 25,
+                      "city": ["a"] * 60 + ["b"] * 30 + ["c"] * 9 + [None]})
+    m = AnomalyModel().fit(X, categorical=["city"])
+    enc = m.encode_categories(pd.DataFrame({"city": ["a", "c", "zzz", None]}))
+    assert enc["city"].tolist() == pytest.approx([0.60, 0.09, 0.0, 0.01])   # unseen -> 0
+    oh = AnomalyModel(encoding="onehot").fit(X, categorical=["city"])
+    enc = oh.encode_categories(pd.DataFrame({"city": ["b", "zzz"]}))
+    assert list(enc.columns) == ["city=<missing>", "city=a", "city=b", "city=c"]
+    assert enc.iloc[0].tolist() == [0, 0, 1, 0] and enc.iloc[1].sum() == 0
+    with pytest.raises(ValueError, match="encoding"):
+        AnomalyModel(encoding="target")
+
+
+def test_categorical_leave_one_column_out_names_the_rare_category():
+    rng = np.random.default_rng(4)
+    n = 600
+    X = pd.DataFrame({"x": rng.normal(0, 1, n), "y": rng.normal(5, 1, n),
+                      "plan": rng.choice(["basic", "pro"], n)})
+    X.loc[17, "plan"] = "platinum"                                    # seen once only
+    X.loc[17, ["x", "y"]] = [0.0, 5.0]                                # numbers perfectly normal
+    m = AnomalyModel().fit(X, categorical=["plan"])
+    reasons = m.explain(X, 17, "iforest_with_categories")
+    assert reasons[0]["column"] == "plan" and reasons[0]["value"] == "platinum"
+    assert reasons[0]["median"] in ("basic", "pro") and reasons[0]["robust_z"] is None
+    rank = m.score(X, "iforest_with_categories").rank(ascending=False)[17]
+    assert rank <= 0.10 * n
+    assert m.score(X, "iforest").rank(ascending=False)[17] > rank      # numbers-only misses it
+
+
+def _two_bumps() -> pd.Series:
+    rng = np.random.default_rng(42)
+    return pd.Series(np.r_[rng.normal(1.0, 0.1, 700), rng.normal(5.0, 0.1, 1300)])
+
+
+def test_mixture_z_two_bumps_by_hand():
+    x = _two_bumps()
+    mix = fit_mixture(x)
+    assert mix is not None and mix["k"] in (2, 3)
+    m = AnomalyModel().fit(pd.DataFrame({"x": x}))
+    probe = pd.DataFrame({"x": [1.0, 5.0, 3.0]})                      # bump, bump, between
+    mz = m.mixture_z(probe)["x"]
+    assert mz.iloc[0] < 1 and mz.iloc[1] < 1                          # no flag in either bump
+    assert mz.iloc[2] > 3.5                                           # the gap is flagged
+    assert m.flagged(m.score(probe, "zscore_mixture"), "zscore_mixture").tolist() == [
+        False, False, True]
+    # the old robust z (median ~5) calls the whole first bump extreme
+    assert m.robust_z(probe)["x"].iloc[0] > 3.5
+    assert m.score(pd.DataFrame({"x": x}), "zscore").gt(3.5).mean() > 0.3
+
+
+def test_bic_picks_one_bump_on_single_bump_data_and_old_z_is_kept():
+    x = pd.Series(np.random.default_rng(1).normal(10, 2, 3000))
+    assert fit_mixture(x) is None
+    m = AnomalyModel().fit(pd.DataFrame({"x": x}))
+    probe = pd.DataFrame({"x": [10.0, 20.0]})
+    assert m.mixture_z(probe).equals(m.robust_z(probe))
+
+
+def test_mixture_handles_tiny_or_flat_columns():
+    assert fit_mixture(pd.Series([1.0] * 50)) is None
+    assert fit_mixture(pd.Series([1.0, 2.0, 3.0])) is None             # too few values
+
+
+def test_detect_reports_categories_and_mixtures():
+    df = read_csv_raw(SAMPLE)
+    section = detect(df, exclude=["y"], top=2)
+    assert "job" in section["categorical_features"] and "y" not in section["categorical_features"]
+    assert set(section["methods"]) == {"iforest", "zscore", "iqr", "zscore_mixture",
+                                       "iforest_with_categories"}
+    assert section["settings"]["encoding"] == "frequency"
+    assert section["settings"]["mixture_components"]                  # some columns bimodal
+    top = section["methods"]["zscore_mixture"]["top"][0]["reasons"][0]
+    assert "mixture_z" in top
