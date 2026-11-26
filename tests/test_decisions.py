@@ -142,3 +142,21 @@ def test_cli_decisions(tmp_path, people):
     r = subprocess.run([sys.executable, str(ROOT / "gatekeeper.py"), "decisions", str(csv),
                         "--target", "nope"], capture_output=True, text=True)
     assert r.returncode == 2
+
+
+def test_pipeline_clean_applies_decisions_together_with_an_imputer(tmp_path, people):
+    """Regression: the imputer option used to replace the config and drop the decisions."""
+    from src.pipeline.run import parse_config, run_pipeline
+
+    csv = tmp_path / "people.csv"
+    people.to_csv(csv, index=False)
+    dec = tmp_path / "decisions.yaml"
+    dec.write_text("decisions:\n  gain: {'99999': keep_as_value}\n  job: {'?': keep_as_category}\n")
+    cfg = parse_config({"input": str(csv), "reports_dir": str(tmp_path / "r"), "steps": [
+        "profile", {"clean": {"imputer": "median", "decisions": str(dec)}}]})
+    code, summary, out = run_pipeline(cfg)
+    assert code == 0
+    assert summary["steps"][1]["result"]["decisions_from_config"] == [
+        "gain=99999: keep_as_value", "job=?: keep_as_category"]
+    cleaned = pd.read_csv(out / "clean" / "cleaned_data.csv")
+    assert (cleaned["gain"] == 99999).sum() == 40 and (cleaned["job"] == "unknown").sum() == 120
