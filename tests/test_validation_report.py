@@ -44,7 +44,8 @@ def test_full_report_on_real_data_matches_schema():
                                anomalies=True, methods=parse_methods("all"), exclude=["y"])
     check(report)
     assert report["anomalies"]["fitted_on"] == "reference"
-    assert set(report["anomalies"]["methods"]) == {"iforest", "zscore", "iqr"}
+    assert set(report["anomalies"]["methods"]) == {"iforest", "zscore", "iqr", "zscore_mixture",
+                                                   "iforest_with_categories"}
     # the file is in time order, so the two halves really drift (economic columns)
     assert "euribor3m" in report["drift"]["major_columns"]
     assert "y" not in report["anomalies"]["features"]
